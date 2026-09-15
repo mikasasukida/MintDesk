@@ -15,6 +15,10 @@ local.properties
 *.log
 *.h264
 
+# Release artifacts are uploaded to GitHub Releases instead of source history.
+release/*.zip
+release/*.apk
+
 # OS junk
 Thumbs.db
 .DS_Store
