@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">MintDeskClient</string>
+    <string name="app_ready">MintDeskClient ready.</string>
+    <string name="host_hint">Host IP</string>
+    <string name="port_hint">Port</string>
+    <string name="connect">Connect</string>
+    <string name="disconnect">Stop</string>
+    <string name="save_device">Save</string>
+    <string name="devices_title">MintDesk Devices</string>
+    <string name="device_status_empty">Save this PC once, then connect from here next time.</string>
+    <string name="device_status_saved">Saved device ready.</string>
+    <string name="default_device_name">Dorm PC</string>
+    <string name="gns_test">GNS Test</string>
+    <string name="mouse_test">Mouse Test</string>
+    <string name="keyboard">Keyboard</string>
+    <string name="game_mode_off">Game Off</string>
+    <string name="game_mode_on">Game On</string>
+</resources>

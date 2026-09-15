@@ -1,0 +1,20 @@
+# Build outputs
+build/
+.gradle/
+.kotlin/
+.cxx/
+cmake-build-*/
+out/
+
+# IDE/local files
+.idea/
+local.properties
+*.iml
+
+# Logs and captures
+*.log
+*.h264
+
+# OS junk
+Thumbs.db
+.DS_Store

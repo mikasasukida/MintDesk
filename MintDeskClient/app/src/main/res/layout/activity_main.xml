@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#0D1117"
+    android:orientation="vertical">
+
+    <FrameLayout
+        android:id="@+id/videoContainer"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:background="#000000"
+        android:focusable="true"
+        android:focusableInTouchMode="true">
+
+        <TextureView
+            android:id="@+id/videoView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:layout_gravity="center" />
+
+        <com.mintdesk.client.RemoteCursorView
+            android:id="@+id/remoteCursorView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="true"
+            android:focusable="false" />
+
+        <LinearLayout
+            android:id="@+id/devicePanel"
+            android:layout_width="420dp"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:background="#161B22"
+            android:orientation="vertical"
+            android:padding="20dp">
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/devices_title"
+                android:textColor="#F0F6FC"
+                android:textSize="22sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/deviceStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text="@string/device_status_empty"
+                android:textColor="#8B949E"
+                android:textSize="13sp" />
+
+            <LinearLayout
+                android:id="@+id/deviceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:background="#21262D"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="14dp">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/deviceNameText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/default_device_name"
+                        android:textColor="#F0F6FC"
+                        android:textSize="16sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/deviceAddressText"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:textColor="#8B949E"
+                        android:textSize="13sp" />
+                </LinearLayout>
+
+                <Button
+                    android:id="@+id/deviceConnectButton"
+                    android:layout_width="116dp"
+                    android:layout_height="44dp"
+                    android:layout_marginStart="12dp"
+                    android:text="@string/connect" />
+            </LinearLayout>
+        </LinearLayout>
+    </FrameLayout>
+
+    <LinearLayout
+        android:id="@+id/controlBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#161B22"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:padding="12dp">
+
+        <EditText
+            android:id="@+id/hostInput"
+            android:layout_width="0dp"
+            android:layout_height="48dp"
+            android:layout_weight="1"
+            android:autofillHints=""
+            android:background="#21262D"
+            android:hint="@string/host_hint"
+            android:inputType="textUri"
+            android:paddingHorizontal="12dp"
+            android:singleLine="true"
+            android:text="127.0.0.1"
+            android:textColor="#F0F6FC"
+            android:textColorHint="#8B949E"
+            android:textSize="14sp" />
+
+        <EditText
+            android:id="@+id/portInput"
+            android:layout_width="92dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:autofillHints=""
+            android:background="#21262D"
+            android:gravity="center"
+            android:hint="@string/port_hint"
+            android:inputType="number"
+            android:singleLine="true"
+            android:text="9000"
+            android:textColor="#F0F6FC"
+            android:textColorHint="#8B949E"
+            android:textSize="14sp" />
+
+        <Button
+            android:id="@+id/connectButton"
+            android:layout_width="112dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:enabled="false"
+            android:text="@string/connect" />
+
+        <Button
+            android:id="@+id/saveDeviceButton"
+            android:layout_width="92dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/save_device" />
+
+        <Button
+            android:id="@+id/gnsTestButton"
+            android:layout_width="112dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/gns_test" />
+
+        <Button
+            android:id="@+id/mouseTestButton"
+            android:layout_width="124dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/mouse_test" />
+
+        <Button
+            android:id="@+id/keyboardButton"
+            android:layout_width="124dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/keyboard" />
+
+        <Button
+            android:id="@+id/gameModeButton"
+            android:layout_width="124dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:text="@string/game_mode_off" />
+    </LinearLayout>
+
+    <EditText
+        android:id="@+id/keyboardInput"
+        android:layout_width="1dp"
+        android:layout_height="1dp"
+        android:alpha="0.01"
+        android:autofillHints=""
+        android:background="@android:color/transparent"
+        android:inputType="textMultiLine|textNoSuggestions"
+        android:singleLine="false" />
+
+    <TextView
+        android:id="@+id/statusText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="#0D1117"
+        android:minHeight="40dp"
+        android:paddingHorizontal="12dp"
+        android:paddingVertical="8dp"
+        android:text="@string/app_ready"
+        android:textColor="#C9D1D9"
+        android:textSize="13sp" />
+
+</LinearLayout>
