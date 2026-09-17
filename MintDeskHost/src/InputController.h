@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <thread>
 
 class InputController {
@@ -20,7 +21,7 @@ public:
 private:
     void run();
     void runClient(SOCKET clientSocket);
-    bool receiveExact(void* data, int size);
+    bool receiveExact(SOCKET clientSocket, void* data, int size);
     void handlePointer(uint32_t action, float normalizedX, float normalizedY);
     void handleWheel(int32_t delta, float normalizedX, float normalizedY);
     void handleText(uint32_t codePoint);
@@ -30,8 +31,10 @@ private:
 
     SOCKET listenSocket_ = INVALID_SOCKET;
     SOCKET socket_ = INVALID_SOCKET;
+    std::mutex socketMutex_;
     uint32_t captureWidth_ = 0;
     uint32_t captureHeight_ = 0;
     std::atomic_bool running_{false};
     std::thread worker_;
+    std::thread clientWorker_;
 };

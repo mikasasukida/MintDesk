@@ -229,10 +229,11 @@ bool InputController::start(
 void InputController::stop() {
     running_ = false;
 
-    if (socket_ != INVALID_SOCKET) {
-        shutdown(socket_, SD_RECEIVE);
-        closesocket(socket_);
-        socket_ = INVALID_SOCKET;
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        if (socket_ != INVALID_SOCKET) {
+            shutdown(socket_, SD_BOTH);
+        }
     }
 
     if (listenSocket_ != INVALID_SOCKET) {
@@ -244,15 +245,24 @@ void InputController::stop() {
     if (worker_.joinable()) {
         worker_.join();
     }
+
+    if (clientWorker_.joinable()) {
+        clientWorker_.join();
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(socketMutex_);
+        socket_ = INVALID_SOCKET;
+    }
 }
 
-bool InputController::receiveExact(void* data, int size) {
+bool InputController::receiveExact(SOCKET clientSocket, void* data, int size) {
     auto* out = static_cast<char*>(data);
     int receivedTotal = 0;
 
     while (running_ && receivedTotal < size) {
         int received = recv(
-            socket_,
+            clientSocket,
             out + receivedTotal,
             size - receivedTotal,
             0
@@ -310,28 +320,55 @@ void InputController::run() {
             << ntohs(clientAddress.sin_port)
             << "\n";
 
-        socket_ = clientSocket;
-        runClient(clientSocket);
+        SOCKET previousSocket = INVALID_SOCKET;
 
-        if (socket_ == clientSocket) {
-            socket_ = INVALID_SOCKET;
+        {
+            std::lock_guard<std::mutex> lock(socketMutex_);
+            previousSocket = socket_;
         }
 
-        shutdown(clientSocket, SD_BOTH);
-        closesocket(clientSocket);
-        std::cout << "Input client disconnected.\n";
+        if (previousSocket != INVALID_SOCKET) {
+            std::cout << "Replacing previous input client.\n";
+            shutdown(previousSocket, SD_BOTH);
+        }
+
+        if (clientWorker_.joinable()) {
+            clientWorker_.join();
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(socketMutex_);
+            socket_ = clientSocket;
+        }
+
+        clientWorker_ = std::thread([this, clientSocket]() {
+            runClient(clientSocket);
+
+            {
+                std::lock_guard<std::mutex> lock(socketMutex_);
+                if (socket_ == clientSocket) {
+                    socket_ = INVALID_SOCKET;
+                }
+            }
+
+            shutdown(clientSocket, SD_BOTH);
+            closesocket(clientSocket);
+            std::cout << "Input client disconnected.\n";
+        });
+    }
+
+    if (clientWorker_.joinable()) {
+        clientWorker_.join();
     }
 
     running_ = false;
 }
 
 void InputController::runClient(SOCKET clientSocket) {
-    socket_ = clientSocket;
-
     while (running_) {
         std::array<uint8_t, 12> header{};
 
-        if (!receiveExact(header.data(), static_cast<int>(header.size()))) {
+        if (!receiveExact(clientSocket, header.data(), static_cast<int>(header.size()))) {
             break;
         }
 
@@ -367,7 +404,7 @@ void InputController::runClient(SOCKET clientSocket) {
         std::vector<uint8_t> payload(payloadSize);
 
         if (payloadSize > 0 &&
-            !receiveExact(payload.data(), static_cast<int>(payload.size()))) {
+            !receiveExact(clientSocket, payload.data(), static_cast<int>(payload.size()))) {
             break;
         }
 
