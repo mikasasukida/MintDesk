@@ -26,7 +26,7 @@ constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.2";
+constexpr wchar_t kCurrentVersion[] = L"0.2.3";
 constexpr wchar_t kManifestUrl[] = L"https://github.com/mikasasukida/MintDesk/raw/refs/heads/main/release/latest.json";
 
 HWND g_status = nullptr;
@@ -434,9 +434,9 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         makeStatic(L"This PC", 38, 144, 300, 30, g_bodyFont);
         g_ip = makeStatic(L"Detecting network...", 38, 178, 430, 28, g_bodyFont);
         g_status = makeStatic(L"Host is stopped", 38, 238, 430, 32, g_bodyFont);
-        g_dropZone = CreateWindowExW(0, L"MintDeskDropZone", nullptr,
-                                     WS_CHILD | WS_VISIBLE | WS_BORDER,
-                                     500, 126, 220, 160, window, nullptr, nullptr, nullptr);
+        g_dropZone = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"MintDeskDropZone", nullptr,
+                                     WS_POPUP | WS_BORDER,
+                                     0, 0, 220, 160, window, nullptr, nullptr, nullptr);
         g_start = makeButton(L"Start Host", kStartButton, 38, 302, 150);
         g_stop = makeButton(L"Stop", kStopButton, 202, 302, 120);
         makeButton(L"Open received files", kFilesButton, 38, 378, 210);
@@ -555,6 +555,12 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
 
     ShowWindow(window, showCommand);
     UpdateWindow(window);
+    if (g_dropZone) {
+        RECT hostBounds{};
+        GetWindowRect(window, &hostBounds);
+        SetWindowPos(g_dropZone, HWND_TOPMOST, hostBounds.right - 245, hostBounds.top + 120,
+                     220, 160, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    }
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {
         TranslateMessage(&message);
