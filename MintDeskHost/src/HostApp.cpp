@@ -33,6 +33,7 @@ HWND g_status = nullptr;
 HWND g_ip = nullptr;
 HWND g_start = nullptr;
 HWND g_stop = nullptr;
+HWND g_dropZone = nullptr;
 HANDLE g_hostProcess = nullptr;
 HFONT g_titleFont = nullptr;
 HFONT g_bodyFont = nullptr;
@@ -316,6 +317,87 @@ bool PutFilesOnClipboard(const std::vector<std::wstring>& files) {
     return true;
 }
 
+void QueueDroppedFiles(HDROP drop) {
+    const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+    std::vector<std::wstring> files;
+    for (UINT index = 0; index < count; ++index) {
+        const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+        std::wstring path(length + 1, L'\0');
+        DragQueryFileW(drop, index, path.data(), length + 1);
+        path.resize(length);
+        files.push_back(std::move(path));
+    }
+    DragFinish(drop);
+    if (PutFilesOnClipboard(files)) {
+        SetStatus(files.size() == 1 ? L"File queued for Android transfer" : L"Files queued for Android transfer");
+    } else {
+        SetStatus(L"Could not queue dropped file");
+    }
+}
+
+LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    static POINT dragOffset{};
+    switch (message) {
+    case WM_CREATE:
+        DragAcceptFiles(window, TRUE);
+        return 0;
+    case WM_LBUTTONDOWN: {
+        dragOffset.x = static_cast<short>(LOWORD(lParam));
+        dragOffset.y = static_cast<short>(HIWORD(lParam));
+        SetCapture(window);
+        return 0;
+    }
+    case WM_MOUSEMOVE:
+        if (GetCapture() == window && (wParam & MK_LBUTTON)) {
+            POINT cursor{};
+            GetCursorPos(&cursor);
+            HWND parent = GetParent(window);
+            ScreenToClient(parent, &cursor);
+            SetWindowPos(window, nullptr, cursor.x - dragOffset.x, cursor.y - dragOffset.y, 0, 0,
+                         SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        }
+        return 0;
+    case WM_LBUTTONUP:
+        if (GetCapture() == window) {
+            ReleaseCapture();
+        }
+        return 0;
+    case WM_DROPFILES:
+        QueueDroppedFiles(reinterpret_cast<HDROP>(wParam));
+        InvalidateRect(window, nullptr, TRUE);
+        return 0;
+    case WM_PAINT: {
+        PAINTSTRUCT paint{};
+        HDC dc = BeginPaint(window, &paint);
+        RECT bounds{};
+        GetClientRect(window, &bounds);
+        HBRUSH background = CreateSolidBrush(RGB(30, 39, 50));
+        FillRect(dc, &bounds, background);
+        DeleteObject(background);
+        HPEN border = CreatePen(PS_DASH, 2, RGB(88, 166, 255));
+        HGDIOBJ oldPen = SelectObject(dc, border);
+        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+        Rectangle(dc, 8, 8, bounds.right - 8, bounds.bottom - 8);
+        SelectObject(dc, oldBrush);
+        SelectObject(dc, oldPen);
+        DeleteObject(border);
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, RGB(225, 235, 245));
+        SelectObject(dc, g_bodyFont);
+        RECT text = bounds;
+        InflateRect(&text, -18, -18);
+        DrawTextW(dc, L"拖到这里上传文件\n\n大文件和小文件都支持", -1, &text,
+                  DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        EndPaint(window, &paint);
+        return 0;
+    }
+    case WM_ERASEBKGND:
+        return 1;
+    default:
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+}
+
 void DrawButton(const DRAWITEMSTRUCT* item) {
     const bool enabled = IsWindowEnabled(item->hwndItem) != FALSE;
     const bool pressed = (item->itemState & ODS_SELECTED) != 0;
@@ -350,16 +432,18 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         makeStatic(L"MintDesk", 36, 30, 400, 42, g_titleFont);
         makeStatic(L"Remote desktop host", 38, 74, 400, 26, g_bodyFont);
         makeStatic(L"This PC", 38, 144, 300, 30, g_bodyFont);
-        g_ip = makeStatic(L"Detecting network...", 38, 178, 680, 28, g_bodyFont);
-        g_status = makeStatic(L"Host is stopped", 38, 238, 680, 32, g_bodyFont);
+        g_ip = makeStatic(L"Detecting network...", 38, 178, 430, 28, g_bodyFont);
+        g_status = makeStatic(L"Host is stopped", 38, 238, 430, 32, g_bodyFont);
+        g_dropZone = CreateWindowExW(0, L"MintDeskDropZone", nullptr,
+                                     WS_CHILD | WS_VISIBLE | WS_BORDER,
+                                     500, 126, 220, 160, window, nullptr, nullptr, nullptr);
         g_start = makeButton(L"Start Host", kStartButton, 38, 302, 150);
         g_stop = makeButton(L"Stop", kStopButton, 202, 302, 120);
         makeButton(L"Open received files", kFilesButton, 38, 378, 210);
         makeButton(L"Open config", kConfigButton, 264, 378, 150);
         makeButton(L"Refresh", kRefreshButton, 430, 378, 120);
         makeButton(L"Check updates", kUpdateButton, 568, 378, 150);
-        makeStatic(L"Copy small files normally. Drag large files onto this window to send them to Android.", 38, 450, 700, 30, g_bodyFont);
-        DragAcceptFiles(window, TRUE);
+        makeStatic(L"Use the upload box for files. Small clipboard copies are still supported.", 38, 450, 700, 30, g_bodyFont);
         SetTimer(window, kTimerId, 1000, nullptr);
         RefreshUi();
         return 0;
@@ -368,22 +452,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         RefreshUi();
         return 0;
     case WM_DROPFILES: {
-        const auto drop = reinterpret_cast<HDROP>(wParam);
-        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
-        std::vector<std::wstring> files;
-        for (UINT index = 0; index < count; ++index) {
-            const UINT length = DragQueryFileW(drop, index, nullptr, 0);
-            std::wstring path(length + 1, L'\0');
-            DragQueryFileW(drop, index, path.data(), length + 1);
-            path.resize(length);
-            files.push_back(std::move(path));
-        }
-        DragFinish(drop);
-        if (PutFilesOnClipboard(files)) {
-            SetStatus(files.size() == 1 ? L"File queued for Android transfer" : L"Files queued for Android transfer");
-        } else {
-            SetStatus(L"Could not queue dropped file");
-        }
+        QueueDroppedFiles(reinterpret_cast<HDROP>(wParam));
         return 0;
     }
     case kStatusMessage: {
@@ -450,6 +519,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
 
 int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     const wchar_t className[] = L"MintDeskHostAppWindow";
+    const wchar_t dropZoneClass[] = L"MintDeskDropZone";
     WNDCLASSW windowClass{};
     windowClass.hInstance = instance;
     windowClass.lpfnWndProc = WindowProc;
@@ -457,6 +527,13 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
     windowClass.hbrBackground = CreateSolidBrush(RGB(13, 17, 23));
     RegisterClassW(&windowClass);
+    WNDCLASSW dropZoneWindowClass{};
+    dropZoneWindowClass.hInstance = instance;
+    dropZoneWindowClass.lpfnWndProc = DropZoneProc;
+    dropZoneWindowClass.lpszClassName = dropZoneClass;
+    dropZoneWindowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    dropZoneWindowClass.hbrBackground = CreateSolidBrush(RGB(30, 39, 50));
+    RegisterClassW(&dropZoneWindowClass);
 
     HWND window = CreateWindowExW(
         0,
