@@ -18,6 +18,7 @@ MintDesk is an experimental remote desktop/control project for personal campus-n
 - Android `F10` file panel for received files and sending files back to Windows.
 - Drag files onto the dedicated upload box in the Windows Host window to queue them for Android transfer.
 - No application-level 100 MB file limit; practical limits still depend on available memory and storage.
+- Windows clipboard files are offered to Android first; the user chooses when to download them.
 
 ## Project Layout
 
@@ -66,6 +67,9 @@ To send a file from Windows to Android, drag it onto the upload box in
 MintDeskHost, then open the Android `F10` file panel and refresh the list.
 The upload box can be repositioned inside the Host window. Small files can
 also continue to use the normal clipboard copy workflow.
+
+Files copied on Windows appear in the Android file panel as pending downloads.
+Tap `DOWNLOAD` to transfer and save a selected file.
 
 Supported resolution presets:
 

@@ -28,7 +28,7 @@ constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.4";
+constexpr wchar_t kCurrentVersion[] = L"0.2.5";
 constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
@@ -476,7 +476,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_status = makeStatic(L"Host is stopped", 38, 238, 430, 32, g_bodyFont);
         g_dropZone = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"MintDeskDropZone", nullptr,
                                      WS_POPUP | WS_BORDER,
-                                     0, 0, 220, 160, window, nullptr, nullptr, nullptr);
+                                     0, 0, 220, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         g_start = makeButton(L"Start Host", kStartButton, 38, 302, 150);
         g_stop = makeButton(L"Stop", kStopButton, 202, 302, 120);
         makeButton(L"Open received files", kFilesButton, 38, 378, 210);
@@ -541,6 +541,10 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         return reinterpret_cast<LRESULT>(g_panelBrush);
     case WM_CLOSE:
         StopHost();
+        if (g_dropZone) {
+            DestroyWindow(g_dropZone);
+            g_dropZone = nullptr;
+        }
         DestroyWindow(window);
         return 0;
     case WM_DESTROY:

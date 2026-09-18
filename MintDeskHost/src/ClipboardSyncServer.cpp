@@ -20,6 +20,9 @@ constexpr uint16_t kVersion = 1;
 constexpr uint16_t kTypeText = 1;
 constexpr uint16_t kTypeImagePng = 2;
 constexpr uint16_t kTypeFile = 3;
+constexpr uint16_t kTypeFileOffer = 4;
+constexpr uint16_t kTypeFileRequest = 5;
+constexpr uint32_t kFileOfferFlag = 1;
 constexpr uint32_t kHeaderSize = 24;
 
 ULONG_PTR g_gdiplusToken = 0;
@@ -336,8 +339,23 @@ bool ClipboardSyncServer::sendCurrentClipboard(SOCKET clientSocket, uint32_t& la
         return true;
     }
 
+    {
+        std::lock_guard lock(pendingMutex_);
+        pendingFiles_.clear();
+    }
+
     for (const auto& item : items) {
-        if (!sendItem(clientSocket, item)) {
+        if (item.type == kTypeFile) {
+            {
+                std::lock_guard lock(pendingMutex_);
+                pendingFiles_.push_back(item);
+            }
+            ClipboardItem offer = item;
+            offer.type = kTypeFileOffer;
+            if (!sendItem(clientSocket, offer, false, kFileOfferFlag)) {
+                return false;
+            }
+        } else if (!sendItem(clientSocket, item)) {
             return false;
         }
     }
@@ -346,7 +364,7 @@ bool ClipboardSyncServer::sendCurrentClipboard(SOCKET clientSocket, uint32_t& la
     return true;
 }
 
-bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& item) {
+bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& item, bool includePayload, uint32_t flags) {
     std::vector<uint8_t> nameBytes(item.name.begin(), item.name.end());
     std::vector<uint8_t> header;
     header.reserve(kHeaderSize);
@@ -355,7 +373,7 @@ bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& ite
     WriteLe16(header, item.type);
     WriteLe32(header, static_cast<uint32_t>(nameBytes.size()));
     WriteLe64(header, static_cast<uint64_t>(item.payload.size()));
-    WriteLe32(header, 0);
+    WriteLe32(header, flags);
 
     if (!sendAll(clientSocket, header.data(), header.size())) {
         return false;
@@ -365,7 +383,7 @@ bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& ite
         return false;
     }
 
-    if (!item.payload.empty() && !sendAll(clientSocket, item.payload.data(), item.payload.size())) {
+    if (includePayload && !item.payload.empty() && !sendAll(clientSocket, item.payload.data(), item.payload.size())) {
         return false;
     }
 
@@ -375,7 +393,7 @@ bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& ite
             ? "image"
             : "file";
     std::cout
-        << "Clipboard sent "
+        << (includePayload ? "Clipboard sent " : "Clipboard offered ")
         << typeName
         << " "
         << item.name
@@ -445,10 +463,12 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
     const uint16_t type = ReadLe16(header.data() + 6);
     const uint32_t nameSize = ReadLe32(header.data() + 8);
     const uint64_t payloadSize = ReadLe64(header.data() + 12);
+    const uint32_t flags = ReadLe32(header.data() + 20);
 
     if (version != kVersion ||
         nameSize > 4096 ||
-        (type != kTypeText && type != kTypeImagePng && type != kTypeFile)) {
+        (type != kTypeText && type != kTypeImagePng && type != kTypeFile && type != kTypeFileRequest) ||
+        (type == kTypeFileRequest && payloadSize != 0)) {
         std::cerr << "Clipboard receive rejected: version=" << version
                   << " type=" << type
                   << " name=" << nameSize
@@ -463,6 +483,26 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
     std::string name(nameSize, '\0');
     if (nameSize > 0 && !receiveAll(clientSocket, name.data(), name.size())) {
         return false;
+    }
+
+    if (type == kTypeFileRequest) {
+        ClipboardItem requested;
+        bool found = false;
+        {
+            std::lock_guard lock(pendingMutex_);
+            const auto match = std::find_if(pendingFiles_.begin(), pendingFiles_.end(),
+                [&name](const ClipboardItem& item) { return item.name == name; });
+            if (match != pendingFiles_.end()) {
+                requested = *match;
+                pendingFiles_.erase(match);
+                found = true;
+            }
+        }
+        if (!found) {
+            std::cerr << "Clipboard file request not found: " << name << "\n";
+            return true;
+        }
+        return sendItem(clientSocket, requested);
     }
 
     std::vector<uint8_t> payload(static_cast<size_t>(payloadSize));

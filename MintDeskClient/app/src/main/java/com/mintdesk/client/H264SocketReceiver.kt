@@ -20,6 +20,7 @@ class H264SocketReceiver(
     private val port: Int,
     private val surface: Surface,
     private val onStatus: (String) -> Unit,
+    private val onFileOffer: (String, Long) -> Unit,
     private val onStopped: () -> Unit
 ) {
     @Volatile
@@ -169,6 +170,11 @@ class H264SocketReceiver(
             ?: onStatus("Clipboard channel is not connected.")
     }
 
+    fun requestFile(displayName: String) {
+        clipboardReceiver?.requestFile(displayName)
+            ?: onStatus("Clipboard channel is not connected.")
+    }
+
     private fun writeHeader(packet: ByteBuffer, type: Int, payloadSize: Int) {
         packet.put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'I'.code.toByte(), 'N'.code.toByte()))
         packet.putShort(PROTOCOL_VERSION.toShort())
@@ -314,7 +320,8 @@ class H264SocketReceiver(
             context = context,
             host = host,
             port = clipboardPort,
-            onStatus = onStatus
+            onStatus = onStatus,
+            onFileOffer = onFileOffer
         ).also { receiver ->
             receiver.start()
         }

@@ -22,7 +22,8 @@ class ClipboardDataReceiver(
     private val context: Context,
     private val host: String,
     private val port: Int,
-    private val onStatus: (String) -> Unit
+    private val onStatus: (String) -> Unit,
+    private val onFileOffer: (String, Long) -> Unit
 ) {
     @Volatile
     private var running = false
@@ -108,6 +109,37 @@ class ClipboardDataReceiver(
         }
     }
 
+    fun requestFile(displayName: String) {
+        val client = socket
+        if (!running || client == null || client.isClosed) {
+            onStatus("Clipboard channel is not connected.")
+            return
+        }
+        thread(name = "MintDesk-FileRequest") {
+            runCatching {
+                val nameBytes = displayName.toByteArray(StandardCharsets.UTF_8)
+                val header = ByteBuffer.allocate(HEADER_SIZE)
+                    .order(ByteOrder.LITTLE_ENDIAN)
+                    .put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'C'.code.toByte(), 'L'.code.toByte()))
+                    .putShort(PROTOCOL_VERSION.toShort())
+                    .putShort(TYPE_FILE_REQUEST.toShort())
+                    .putInt(nameBytes.size)
+                    .putLong(0L)
+                    .putInt(0)
+                    .array()
+                synchronized(outputLock) {
+                    val output = client.getOutputStream()
+                    writeAll(output, header)
+                    writeAll(output, nameBytes)
+                    output.flush()
+                }
+                onStatus("Downloading $displayName...")
+            }.onFailure { error ->
+                onStatus("Download request failed: ${error.message ?: error.javaClass.simpleName}")
+            }
+        }
+    }
+
     private fun writeAll(output: java.io.OutputStream, bytes: ByteArray) {
         var offset = 0
         while (offset < bytes.size) {
@@ -143,7 +175,7 @@ class ClipboardDataReceiver(
                 val type = view.short.toInt() and 0xFFFF
                 val nameSize = view.int
                 val payloadSize = view.long
-                view.int
+                val flags = view.int
 
                 if (version != PROTOCOL_VERSION ||
                     nameSize < 0 ||
@@ -160,6 +192,11 @@ class ClipboardDataReceiver(
                     String(input.readExact(nameSize) ?: break, StandardCharsets.UTF_8)
                 } else {
                     defaultNameForType(type)
+                }
+
+                if (type == TYPE_FILE_OFFER) {
+                    onFileOffer(name, payloadSize)
+                    continue
                 }
 
                 val payload = input.readExact(payloadSize.toInt()) ?: break
@@ -291,6 +328,8 @@ class ClipboardDataReceiver(
         private const val TYPE_TEXT = 1
         private const val TYPE_IMAGE_PNG = 2
         private const val TYPE_FILE = 3
+        private const val TYPE_FILE_OFFER = 4
+        private const val TYPE_FILE_REQUEST = 5
         private const val MAX_NAME_BYTES = 4096
     }
 }

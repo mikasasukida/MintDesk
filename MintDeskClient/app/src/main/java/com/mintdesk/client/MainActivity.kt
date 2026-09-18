@@ -80,6 +80,7 @@ class MainActivity : Activity() {
     private var hasLastGameMouse = false
     private var remoteFullscreen = false
     private var filePanelVisible = false
+    private val pendingRemoteFiles = linkedMapOf<String, Long>()
     private var lastGameMouseX = 0f
     private var lastGameMouseY = 0f
 
@@ -455,6 +456,7 @@ class MainActivity : Activity() {
             port = port,
             surface = targetSurface,
             onStatus = ::setStatus,
+            onFileOffer = ::onFileOffer,
             onStopped = ::onReceiverStopped
         ).also { it.start() }
 
@@ -709,13 +711,25 @@ class MainActivity : Activity() {
         val uri: Uri
     )
 
+    private fun onFileOffer(name: String, size: Long) {
+        runOnUiThread {
+            pendingRemoteFiles[name] = size
+            if (filePanelVisible) {
+                refreshFileList()
+            } else {
+                setStatus("File ready to download: $name")
+            }
+        }
+    }
+
     private fun refreshFileList() {
         filePanelStatus.text = "Loading files..."
         Thread {
             val files = queryReceivedFiles()
+            val pending = pendingRemoteFiles.toMap()
             runOnUiThread {
                 if (!filePanelVisible) return@runOnUiThread
-                renderFileList(files)
+                renderFileList(files, pending)
             }
         }.start()
     }
@@ -774,12 +788,42 @@ class MainActivity : Activity() {
         return result
     }
 
-    private fun renderFileList(files: List<RemoteFile>) {
+    private fun renderFileList(files: List<RemoteFile>, pending: Map<String, Long>) {
         fileListContainer.removeAllViews()
         filePanelStatus.text = if (files.isEmpty()) {
             "No files in Downloads/MintDesk."
         } else {
             "${files.size} received item(s)"
+        }
+
+        pending.forEach { (name, size) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                setPadding(14, 10, 10, 10)
+                setBackgroundColor(android.graphics.Color.rgb(43, 49, 58))
+            }
+            val label = TextView(this).apply {
+                text = "$name\n${formatBytes(size)} · ready to download"
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val download = Button(this).apply {
+                text = "DOWNLOAD"
+                setOnClickListener {
+                    pendingRemoteFiles.remove(name)
+                    receiver?.requestFile(name)
+                    filePanelStatus.text = "Downloading $name..."
+                    refreshFileList()
+                }
+            }
+            row.addView(label)
+            row.addView(download, LinearLayout.LayoutParams(126, 44))
+            fileListContainer.addView(row, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, 8) })
         }
 
         files.forEach { file ->
@@ -799,6 +843,13 @@ class MainActivity : Activity() {
             params.setMargins(0, 0, 0, 8)
             fileListContainer.addView(row, params)
         }
+    }
+
+    private fun formatBytes(size: Long): String {
+        if (size < 1024) return "$size B"
+        if (size < 1024 * 1024) return "${size / 1024} KB"
+        if (size < 1024 * 1024 * 1024) return "${size / (1024 * 1024)} MB"
+        return "${size / (1024 * 1024 * 1024)} GB"
     }
 
     private fun openReceivedFile(file: RemoteFile) {

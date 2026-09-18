@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,7 +29,7 @@ private:
 
     void run();
     bool sendCurrentClipboard(SOCKET clientSocket, uint32_t& lastSequence);
-    bool sendItem(SOCKET clientSocket, const ClipboardItem& item);
+    bool sendItem(SOCKET clientSocket, const ClipboardItem& item, bool includePayload = true, uint32_t flags = 0);
     bool sendAll(SOCKET clientSocket, const void* data, size_t size);
     bool receiveItem(SOCKET clientSocket);
     bool receiveAll(SOCKET clientSocket, void* data, size_t size);
@@ -41,4 +42,6 @@ private:
     SOCKET listenSocket_ = INVALID_SOCKET;
     std::atomic_bool running_{false};
     std::thread worker_;
+    std::mutex pendingMutex_;
+    std::vector<ClipboardItem> pendingFiles_;
 };
