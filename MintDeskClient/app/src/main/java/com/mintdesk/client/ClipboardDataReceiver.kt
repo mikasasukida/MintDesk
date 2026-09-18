@@ -66,9 +66,6 @@ class ClipboardDataReceiver(
                         val count = input.read(buffer)
                         if (count < 0) break
                         total += count
-                        if (total > MAX_PAYLOAD_BYTES) {
-                            error("File is larger than 100 MB")
-                        }
                         output.write(buffer, 0, count)
                     }
                     output.toByteArray()
@@ -152,7 +149,7 @@ class ClipboardDataReceiver(
                     nameSize < 0 ||
                     nameSize > MAX_NAME_BYTES ||
                     payloadSize < 0 ||
-                    payloadSize > MAX_PAYLOAD_BYTES
+                    payloadSize > Int.MAX_VALUE.toLong()
                 ) {
                     throw IllegalStateException(
                         "Unsupported clipboard packet version=$version name=$nameSize size=$payloadSize"
@@ -295,6 +292,5 @@ class ClipboardDataReceiver(
         private const val TYPE_IMAGE_PNG = 2
         private const val TYPE_FILE = 3
         private const val MAX_NAME_BYTES = 4096
-        private const val MAX_PAYLOAD_BYTES = 100 * 1024 * 1024
     }
 }

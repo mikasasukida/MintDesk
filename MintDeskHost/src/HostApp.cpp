@@ -3,11 +3,13 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #include <urlmon.h>
 #include <ws2tcpip.h>
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
 #include <string>
 #include <thread>
 #include <vector>
@@ -271,6 +273,49 @@ void OpenPath(const std::filesystem::path& path) {
     ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+bool PutFilesOnClipboard(const std::vector<std::wstring>& files) {
+    if (files.empty() || !OpenClipboard(nullptr)) {
+        return false;
+    }
+
+    EmptyClipboard();
+    size_t characters = sizeof(DROPFILES) / sizeof(wchar_t) + 1;
+    for (const auto& file : files) {
+        characters += file.size() + 1;
+    }
+
+    HGLOBAL memory = GlobalAlloc(GHND, characters * sizeof(wchar_t));
+    if (!memory) {
+        CloseClipboard();
+        return false;
+    }
+
+    auto* dropFiles = static_cast<DROPFILES*>(GlobalLock(memory));
+    if (!dropFiles) {
+        GlobalFree(memory);
+        CloseClipboard();
+        return false;
+    }
+
+    dropFiles->pFiles = sizeof(DROPFILES);
+    dropFiles->fWide = TRUE;
+    auto* target = reinterpret_cast<wchar_t*>(reinterpret_cast<BYTE*>(dropFiles) + sizeof(DROPFILES));
+    for (const auto& file : files) {
+        std::copy(file.begin(), file.end(), target);
+        target += file.size() + 1;
+    }
+    *target = L'\0';
+    GlobalUnlock(memory);
+
+    if (!SetClipboardData(CF_HDROP, memory)) {
+        GlobalFree(memory);
+        CloseClipboard();
+        return false;
+    }
+    CloseClipboard();
+    return true;
+}
+
 void DrawButton(const DRAWITEMSTRUCT* item) {
     const bool enabled = IsWindowEnabled(item->hwndItem) != FALSE;
     const bool pressed = (item->itemState & ODS_SELECTED) != 0;
@@ -313,7 +358,8 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         makeButton(L"Open config", kConfigButton, 264, 378, 150);
         makeButton(L"Refresh", kRefreshButton, 430, 378, 120);
         makeButton(L"Check updates", kUpdateButton, 568, 378, 150);
-        makeStatic(L"MintDesk keeps high-bandwidth video direct. Files are saved to D:\\MintDesk\\Received.", 38, 450, 680, 30, g_bodyFont);
+        makeStatic(L"Copy small files normally. Drag large files onto this window to send them to Android.", 38, 450, 700, 30, g_bodyFont);
+        DragAcceptFiles(window, TRUE);
         SetTimer(window, kTimerId, 1000, nullptr);
         RefreshUi();
         return 0;
@@ -321,6 +367,25 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         RefreshUi();
         return 0;
+    case WM_DROPFILES: {
+        const auto drop = reinterpret_cast<HDROP>(wParam);
+        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        std::vector<std::wstring> files;
+        for (UINT index = 0; index < count; ++index) {
+            const UINT length = DragQueryFileW(drop, index, nullptr, 0);
+            std::wstring path(length + 1, L'\0');
+            DragQueryFileW(drop, index, path.data(), length + 1);
+            path.resize(length);
+            files.push_back(std::move(path));
+        }
+        DragFinish(drop);
+        if (PutFilesOnClipboard(files)) {
+            SetStatus(files.size() == 1 ? L"File queued for Android transfer" : L"Files queued for Android transfer");
+        } else {
+            SetStatus(L"Could not queue dropped file");
+        }
+        return 0;
+    }
     case kStatusMessage: {
         auto* status = reinterpret_cast<std::wstring*>(lParam);
         if (status) {

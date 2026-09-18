@@ -21,7 +21,6 @@ constexpr uint16_t kTypeText = 1;
 constexpr uint16_t kTypeImagePng = 2;
 constexpr uint16_t kTypeFile = 3;
 constexpr uint32_t kHeaderSize = 24;
-constexpr uint64_t kMaxFileBytes = 100ull * 1024ull * 1024ull;
 
 ULONG_PTR g_gdiplusToken = 0;
 
@@ -449,7 +448,6 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
 
     if (version != kVersion ||
         nameSize > 4096 ||
-        payloadSize > kMaxFileBytes ||
         (type != kTypeText && type != kTypeImagePng && type != kTypeFile)) {
         std::cerr << "Clipboard receive rejected: version=" << version
                   << " type=" << type
@@ -636,7 +634,7 @@ bool ClipboardSyncServer::readFileDrop(std::vector<ClipboardItem>& items) {
         }
 
         uint64_t fileSize = std::filesystem::file_size(path, error);
-        if (error || fileSize == 0 || fileSize > kMaxFileBytes) {
+        if (error || fileSize == 0) {
             std::wcout
                 << L"Clipboard file skipped: "
                 << path
