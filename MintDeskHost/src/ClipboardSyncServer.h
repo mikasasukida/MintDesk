@@ -43,5 +43,6 @@ private:
     std::atomic_bool running_{false};
     std::thread worker_;
     std::mutex pendingMutex_;
+    std::mutex sendMutex_;
     std::vector<ClipboardItem> pendingFiles_;
 };

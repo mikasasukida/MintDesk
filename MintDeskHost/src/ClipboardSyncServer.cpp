@@ -365,6 +365,7 @@ bool ClipboardSyncServer::sendCurrentClipboard(SOCKET clientSocket, uint32_t& la
 }
 
 bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& item, bool includePayload, uint32_t flags) {
+    std::lock_guard sendLock(sendMutex_);
     std::vector<uint8_t> nameBytes(item.name.begin(), item.name.end());
     std::vector<uint8_t> header;
     header.reserve(kHeaderSize);

@@ -28,7 +28,7 @@ constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.5";
+constexpr wchar_t kCurrentVersion[] = L"0.2.6";
 constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
