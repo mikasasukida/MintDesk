@@ -3,10 +3,13 @@
 #include <windows.h>
 #include <iphlpapi.h>
 #include <shellapi.h>
+#include <urlmon.h>
 #include <ws2tcpip.h>
 
 #include <filesystem>
+#include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 #pragma comment(lib, "iphlpapi.lib")
@@ -17,7 +20,12 @@ constexpr int kStopButton = 1002;
 constexpr int kFilesButton = 1003;
 constexpr int kConfigButton = 1004;
 constexpr int kRefreshButton = 1005;
+constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
+constexpr UINT kStatusMessage = WM_APP + 1;
+constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
+constexpr wchar_t kCurrentVersion[] = L"0.2.0";
+constexpr wchar_t kManifestUrl[] = L"https://raw.githubusercontent.com/mikasasukida/MintDesk/main/release/latest.json";
 
 HWND g_status = nullptr;
 HWND g_ip = nullptr;
@@ -27,6 +35,7 @@ HANDLE g_hostProcess = nullptr;
 HFONT g_titleFont = nullptr;
 HFONT g_bodyFont = nullptr;
 HBRUSH g_panelBrush = nullptr;
+bool g_updateRunning = false;
 
 std::filesystem::path AppDirectory() {
     wchar_t buffer[MAX_PATH]{};
@@ -85,6 +94,116 @@ void SetStatus(const std::wstring& status) {
     if (g_status) {
         SetWindowTextW(g_status, status.c_str());
     }
+}
+
+void PostStatus(HWND window, const std::wstring& status) {
+    auto* message = new std::wstring(status);
+    if (!PostMessageW(window, kStatusMessage, 0, reinterpret_cast<LPARAM>(message))) {
+        delete message;
+    }
+}
+
+std::wstring ExtractJsonString(const std::string& json, const std::string& key) {
+    const std::string marker = "\"" + key + "\"";
+    const size_t keyPosition = json.find(marker);
+    if (keyPosition == std::string::npos) {
+        return {};
+    }
+    const size_t colon = json.find(':', keyPosition + marker.size());
+    const size_t firstQuote = json.find('"', colon + 1);
+    const size_t secondQuote = json.find('"', firstQuote + 1);
+    if (colon == std::string::npos || firstQuote == std::string::npos || secondQuote == std::string::npos) {
+        return {};
+    }
+    const std::string value = json.substr(firstQuote + 1, secondQuote - firstQuote - 1);
+    return std::wstring(value.begin(), value.end());
+}
+
+std::filesystem::path TemporaryFile(const wchar_t* name) {
+    wchar_t buffer[MAX_PATH]{};
+    const DWORD length = GetTempPathW(MAX_PATH, buffer);
+    return std::filesystem::path(std::wstring(buffer, length)) / name;
+}
+
+void CheckForUpdates(HWND window) {
+    if (g_updateRunning) {
+        return;
+    }
+    g_updateRunning = true;
+    EnableWindow(GetDlgItem(window, kUpdateButton), FALSE);
+    SetStatus(L"Checking for updates...");
+
+    std::thread([window]() {
+        const auto manifestPath = TemporaryFile(L"mintdesk-latest.json");
+        const HRESULT downloadResult = URLDownloadToFileW(
+            nullptr,
+            kManifestUrl,
+            manifestPath.c_str(),
+            0,
+            nullptr
+        );
+
+        std::wstring result;
+        if (FAILED(downloadResult)) {
+            result = L"Update check failed. Check your internet connection.";
+        } else {
+            std::ifstream input(manifestPath, std::ios::binary);
+            std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+            const std::wstring version = ExtractJsonString(json, "version");
+            if (version.empty()) {
+                result = L"Update manifest is invalid.";
+            } else if (version == kCurrentVersion) {
+                result = L"MintDesk is up to date (v" + std::wstring(kCurrentVersion) + L").";
+            } else {
+                const std::wstring packageUrl = ExtractJsonString(json, "downloadUrl");
+                if (packageUrl.empty()) {
+                    result = L"A new version was found, but its download link is missing.";
+                } else {
+                    const int choice = MessageBoxW(
+                        window,
+                        (L"New version v" + version + L" is available. Download and install it now?").c_str(),
+                        L"MintDesk Update",
+                        MB_YESNO | MB_ICONINFORMATION
+                    );
+                    if (choice == IDYES) {
+                        const auto zipPath = TemporaryFile(L"MintDesk-update.zip");
+                        PostStatus(window, L"Downloading update...");
+                        if (SUCCEEDED(URLDownloadToFileW(nullptr, packageUrl.c_str(), zipPath.c_str(), 0, nullptr))) {
+                            const auto scriptPath = TemporaryFile(L"MintDesk-update.ps1");
+                            std::wofstream script(scriptPath);
+                            const auto appDirectory = AppDirectory().wstring();
+                            script << L"$app='" << appDirectory << L"'\n";
+                            script << L"$zip='" << zipPath.wstring() << L"'\n";
+                            script << L"$stage=Join-Path $env:TEMP 'MintDesk-update-stage'\n";
+                            script << L"while (Get-Process -Id " << GetCurrentProcessId() << L" -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }\n";
+                            script << L"Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue\n";
+                            script << L"Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force\n";
+                            script << L"Copy-Item -Path (Join-Path $stage '*') -Destination $app -Recurse -Force\n";
+                            script << L"Start-Process (Join-Path $app 'MintDeskHostApp.exe')\n";
+                            script.close();
+
+                            ShellExecuteW(
+                                nullptr,
+                                L"open",
+                                L"powershell.exe",
+                                (L"-NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath.wstring() + L"\"").c_str(),
+                                nullptr,
+                                SW_HIDE
+                            );
+                            PostMessageW(window, WM_CLOSE, 0, 0);
+                            return;
+                        }
+                        result = L"Update download failed.";
+                    } else {
+                        result = L"Update postponed.";
+                    }
+                }
+            }
+        }
+
+        auto* message = new std::wstring(result);
+        PostMessageW(window, kUpdateFinishedMessage, 0, reinterpret_cast<LPARAM>(message));
+    }).detach();
 }
 
 void RefreshUi() {
@@ -193,6 +312,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         makeButton(L"Open received files", kFilesButton, 38, 378, 210);
         makeButton(L"Open config", kConfigButton, 264, 378, 150);
         makeButton(L"Refresh", kRefreshButton, 430, 378, 120);
+        makeButton(L"Check updates", kUpdateButton, 568, 378, 150);
         makeStatic(L"MintDesk keeps high-bandwidth video direct. Files are saved to D:\\MintDesk\\Received.", 38, 450, 680, 30, g_bodyFont);
         SetTimer(window, kTimerId, 1000, nullptr);
         RefreshUi();
@@ -201,6 +321,24 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
     case WM_TIMER:
         RefreshUi();
         return 0;
+    case kStatusMessage: {
+        auto* status = reinterpret_cast<std::wstring*>(lParam);
+        if (status) {
+            SetStatus(*status);
+            delete status;
+        }
+        return 0;
+    }
+    case kUpdateFinishedMessage: {
+        auto* status = reinterpret_cast<std::wstring*>(lParam);
+        if (status) {
+            g_updateRunning = false;
+            EnableWindow(GetDlgItem(window, kUpdateButton), TRUE);
+            SetStatus(*status);
+            delete status;
+        }
+        return 0;
+    }
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case kStartButton: StartHost(); return 0;
@@ -216,6 +354,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
             return 0;
         }
         case kRefreshButton: RefreshUi(); return 0;
+        case kUpdateButton: CheckForUpdates(window); return 0;
         default: break;
         }
         break;
