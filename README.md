@@ -21,7 +21,7 @@ MintDesk is an experimental remote desktop/control project for personal campus-n
 
 ```text
 MintDeskHost/
-  Windows C++ host
+  Windows C++ host and desktop launcher
 
 MintDeskClient/
   Android Kotlin client
@@ -41,6 +41,11 @@ Build environment used during development:
 - NVIDIA driver with NVENC support
 
 Runtime package is included under `release/`.
+
+Start `MintDeskHostApp.exe` for the desktop interface. It shows the current
+IPv4 address, the video/input/file ports, Host status, the received-file
+folder, and the Host configuration file. The launcher starts the capture
+engine in the background.
 
 Host config file:
 

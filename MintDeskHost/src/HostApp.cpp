@@ -1,0 +1,283 @@
+#define _WIN32_WINNT 0x0601
+#include <winsock2.h>
+#include <windows.h>
+#include <iphlpapi.h>
+#include <shellapi.h>
+#include <ws2tcpip.h>
+
+#include <filesystem>
+#include <string>
+#include <vector>
+
+#pragma comment(lib, "iphlpapi.lib")
+
+namespace {
+constexpr int kStartButton = 1001;
+constexpr int kStopButton = 1002;
+constexpr int kFilesButton = 1003;
+constexpr int kConfigButton = 1004;
+constexpr int kRefreshButton = 1005;
+constexpr UINT_PTR kTimerId = 1;
+
+HWND g_status = nullptr;
+HWND g_ip = nullptr;
+HWND g_start = nullptr;
+HWND g_stop = nullptr;
+HANDLE g_hostProcess = nullptr;
+HFONT g_titleFont = nullptr;
+HFONT g_bodyFont = nullptr;
+HBRUSH g_panelBrush = nullptr;
+
+std::filesystem::path AppDirectory() {
+    wchar_t buffer[MAX_PATH]{};
+    const DWORD length = GetModuleFileNameW(nullptr, buffer, MAX_PATH);
+    return std::filesystem::path(std::wstring(buffer, length)).parent_path();
+}
+
+std::filesystem::path HostExecutable() {
+    return AppDirectory() / L"MintDeskHost.exe";
+}
+
+std::filesystem::path ReceivedDirectory() {
+    return L"D:\\MintDesk\\Received";
+}
+
+std::wstring CurrentIPv4() {
+    ULONG size = 0;
+    GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST, nullptr, nullptr, &size);
+    if (size == 0) {
+        return L"Unavailable";
+    }
+
+    std::vector<BYTE> buffer(size);
+    auto* adapters = reinterpret_cast<IP_ADAPTER_ADDRESSES*>(buffer.data());
+    if (GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST, nullptr, adapters, &size) != NO_ERROR) {
+        return L"Unavailable";
+    }
+
+    for (auto* adapter = adapters; adapter; adapter = adapter->Next) {
+        if (adapter->OperStatus != IfOperStatusUp || adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK) {
+            continue;
+        }
+        for (auto* address = adapter->FirstUnicastAddress; address; address = address->Next) {
+            if (!address->Address.lpSockaddr || address->Address.lpSockaddr->sa_family != AF_INET) {
+                continue;
+            }
+            auto* ipv4 = reinterpret_cast<sockaddr_in*>(address->Address.lpSockaddr);
+            const DWORD hostOrder = ntohl(ipv4->sin_addr.S_un.S_addr);
+            if ((hostOrder >> 24) == 127 || (hostOrder >> 24) == 169 ||
+                (hostOrder >> 24) == 198) {
+                continue;
+            }
+            wchar_t result[INET_ADDRSTRLEN]{};
+            InetNtopW(AF_INET, &ipv4->sin_addr, result, INET_ADDRSTRLEN);
+            return result;
+        }
+    }
+    return L"Unavailable";
+}
+
+bool IsHostRunning() {
+    return g_hostProcess && WaitForSingleObject(g_hostProcess, 0) == WAIT_TIMEOUT;
+}
+
+void SetStatus(const std::wstring& status) {
+    if (g_status) {
+        SetWindowTextW(g_status, status.c_str());
+    }
+}
+
+void RefreshUi() {
+    if (g_ip) {
+        SetWindowTextW(g_ip, (L"IPv4  " + CurrentIPv4() + L"    |    Video 9000    Input 9001    Files 9002").c_str());
+    }
+
+    const bool running = IsHostRunning();
+    EnableWindow(g_start, running ? FALSE : TRUE);
+    EnableWindow(g_stop, running ? TRUE : FALSE);
+    SetStatus(running ? L"Host is running and ready for connections" : L"Host is stopped");
+}
+
+void StartHost() {
+    if (IsHostRunning()) {
+        return;
+    }
+
+    const auto executable = HostExecutable();
+    if (!std::filesystem::exists(executable)) {
+        MessageBoxW(nullptr, L"MintDeskHost.exe was not found beside this application.", L"MintDesk", MB_ICONERROR);
+        return;
+    }
+
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    startup.dwFlags = STARTF_USESHOWWINDOW;
+    startup.wShowWindow = SW_HIDE;
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(
+        executable.c_str(),
+        nullptr,
+        nullptr,
+        nullptr,
+        FALSE,
+        CREATE_NO_WINDOW,
+        nullptr,
+        AppDirectory().c_str(),
+        &startup,
+        &process
+    )) {
+        MessageBoxW(nullptr, L"MintDeskHost could not be started.", L"MintDesk", MB_ICONERROR);
+        return;
+    }
+
+    CloseHandle(process.hThread);
+    g_hostProcess = process.hProcess;
+    SetStatus(L"Starting capture and network services...");
+    RefreshUi();
+}
+
+void StopHost() {
+    if (!IsHostRunning()) {
+        return;
+    }
+    TerminateProcess(g_hostProcess, 0);
+    WaitForSingleObject(g_hostProcess, 2000);
+    CloseHandle(g_hostProcess);
+    g_hostProcess = nullptr;
+    RefreshUi();
+}
+
+void OpenPath(const std::filesystem::path& path) {
+    std::filesystem::create_directories(path);
+    ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void DrawButton(const DRAWITEMSTRUCT* item) {
+    const bool enabled = IsWindowEnabled(item->hwndItem) != FALSE;
+    const bool pressed = (item->itemState & ODS_SELECTED) != 0;
+    HBRUSH brush = CreateSolidBrush(!enabled ? RGB(48, 54, 61) : pressed ? RGB(48, 126, 204) : RGB(44, 96, 150));
+    FillRect(item->hDC, &item->rcItem, brush);
+    DeleteObject(brush);
+    SetBkMode(item->hDC, TRANSPARENT);
+    SetTextColor(item->hDC, enabled ? RGB(240, 246, 252) : RGB(139, 148, 158));
+    wchar_t text[128]{};
+    GetWindowTextW(item->hwndItem, text, 128);
+    DrawTextW(item->hDC, text, -1, const_cast<RECT*>(&item->rcItem), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+}
+
+LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lParam) {
+    switch (message) {
+    case WM_CREATE: {
+        g_panelBrush = CreateSolidBrush(RGB(22, 27, 34));
+        g_titleFont = CreateFontW(30, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+        g_bodyFont = CreateFontW(16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, 0, 0, CLEARTYPE_QUALITY, 0, L"Segoe UI");
+
+        auto makeStatic = [&](const wchar_t* text, int x, int y, int width, int height, HFONT font) {
+            HWND control = CreateWindowW(L"STATIC", text, WS_CHILD | WS_VISIBLE, x, y, width, height, window, nullptr, nullptr, nullptr);
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            return control;
+        };
+        auto makeButton = [&](const wchar_t* text, int id, int x, int y, int width) {
+            HWND control = CreateWindowW(L"BUTTON", text, WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, x, y, width, 42, window, reinterpret_cast<HMENU>(id), nullptr, nullptr);
+            SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(g_bodyFont), TRUE);
+            return control;
+        };
+
+        makeStatic(L"MintDesk", 36, 30, 400, 42, g_titleFont);
+        makeStatic(L"Remote desktop host", 38, 74, 400, 26, g_bodyFont);
+        makeStatic(L"This PC", 38, 144, 300, 30, g_bodyFont);
+        g_ip = makeStatic(L"Detecting network...", 38, 178, 680, 28, g_bodyFont);
+        g_status = makeStatic(L"Host is stopped", 38, 238, 680, 32, g_bodyFont);
+        g_start = makeButton(L"Start Host", kStartButton, 38, 302, 150);
+        g_stop = makeButton(L"Stop", kStopButton, 202, 302, 120);
+        makeButton(L"Open received files", kFilesButton, 38, 378, 210);
+        makeButton(L"Open config", kConfigButton, 264, 378, 150);
+        makeButton(L"Refresh", kRefreshButton, 430, 378, 120);
+        makeStatic(L"MintDesk keeps high-bandwidth video direct. Files are saved to D:\\MintDesk\\Received.", 38, 450, 680, 30, g_bodyFont);
+        SetTimer(window, kTimerId, 1000, nullptr);
+        RefreshUi();
+        return 0;
+    }
+    case WM_TIMER:
+        RefreshUi();
+        return 0;
+    case WM_COMMAND:
+        switch (LOWORD(wParam)) {
+        case kStartButton: StartHost(); return 0;
+        case kStopButton: StopHost(); return 0;
+        case kFilesButton: OpenPath(ReceivedDirectory()); return 0;
+        case kConfigButton: {
+            const auto config = AppDirectory() / L"MintDeskHost.ini";
+            if (!std::filesystem::exists(config)) {
+                WritePrivateProfileStringW(L"MintDesk", L"resolution", L"native", config.c_str());
+                WritePrivateProfileStringW(L"MintDesk", L"fps", L"60", config.c_str());
+            }
+            ShellExecuteW(nullptr, L"open", config.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+            return 0;
+        }
+        case kRefreshButton: RefreshUi(); return 0;
+        default: break;
+        }
+        break;
+    case WM_DRAWITEM:
+        DrawButton(reinterpret_cast<DRAWITEMSTRUCT*>(lParam));
+        return TRUE;
+    case WM_CTLCOLORSTATIC:
+        SetBkMode(reinterpret_cast<HDC>(wParam), TRANSPARENT);
+        SetTextColor(reinterpret_cast<HDC>(wParam), RGB(201, 209, 217));
+        return reinterpret_cast<LRESULT>(g_panelBrush);
+    case WM_CLOSE:
+        StopHost();
+        DestroyWindow(window);
+        return 0;
+    case WM_DESTROY:
+        KillTimer(window, kTimerId);
+        DeleteObject(g_titleFont);
+        DeleteObject(g_bodyFont);
+        DeleteObject(g_panelBrush);
+        PostQuitMessage(0);
+        return 0;
+    default:
+        return DefWindowProcW(window, message, wParam, lParam);
+    }
+    return DefWindowProcW(window, message, wParam, lParam);
+}
+}
+
+int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
+    const wchar_t className[] = L"MintDeskHostAppWindow";
+    WNDCLASSW windowClass{};
+    windowClass.hInstance = instance;
+    windowClass.lpfnWndProc = WindowProc;
+    windowClass.lpszClassName = className;
+    windowClass.hCursor = LoadCursorW(nullptr, MAKEINTRESOURCEW(32512));
+    windowClass.hbrBackground = CreateSolidBrush(RGB(13, 17, 23));
+    RegisterClassW(&windowClass);
+
+    HWND window = CreateWindowExW(
+        0,
+        className,
+        L"MintDesk Host",
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX,
+        CW_USEDEFAULT,
+        CW_USEDEFAULT,
+        780,
+        560,
+        nullptr,
+        nullptr,
+        instance,
+        nullptr
+    );
+    if (!window) {
+        return 1;
+    }
+
+    ShowWindow(window, showCommand);
+    UpdateWindow(window);
+    MSG message{};
+    while (GetMessageW(&message, nullptr, 0, 0) > 0) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+    }
+    return static_cast<int>(message.wParam);
+}

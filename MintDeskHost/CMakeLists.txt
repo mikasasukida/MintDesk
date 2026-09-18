@@ -20,6 +20,11 @@ add_executable(MintDeskHost
         src/MintDeskHost.rc
 )
 
+add_executable(MintDeskHostApp WIN32
+        src/HostApp.cpp
+        src/MintDeskHost.rc
+)
+
 target_include_directories(MintDeskHost
         PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/src"
@@ -32,6 +37,13 @@ target_link_libraries(MintDeskHost
         gdiplus
         gdi32
         ole32
+        shell32
+        user32
+        ws2_32
+)
+
+target_link_libraries(MintDeskHostApp
+        iphlpapi
         shell32
         user32
         ws2_32
