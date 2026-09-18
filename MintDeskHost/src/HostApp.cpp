@@ -27,7 +27,7 @@ constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
 constexpr wchar_t kCurrentVersion[] = L"0.2.1";
-constexpr wchar_t kManifestUrl[] = L"https://raw.githubusercontent.com/mikasasukida/MintDesk/main/release/latest.json";
+constexpr wchar_t kManifestUrl[] = L"https://github.com/mikasasukida/MintDesk/raw/refs/heads/main/release/latest.json";
 
 HWND g_status = nullptr;
 HWND g_ip = nullptr;
