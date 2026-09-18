@@ -45,6 +45,7 @@ target_link_libraries(MintDeskHost
 target_link_libraries(MintDeskHostApp
         iphlpapi
         shell32
+        crypt32
         urlmon
         user32
         ws2_32

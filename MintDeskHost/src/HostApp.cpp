@@ -5,11 +5,13 @@
 #include <shellapi.h>
 #include <shlobj.h>
 #include <urlmon.h>
+#include <wincrypt.h>
 #include <ws2tcpip.h>
 
 #include <filesystem>
 #include <fstream>
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <thread>
 #include <vector>
@@ -26,8 +28,8 @@ constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.3";
-constexpr wchar_t kManifestUrl[] = L"https://github.com/mikasasukida/MintDesk/raw/refs/heads/main/release/latest.json";
+constexpr wchar_t kCurrentVersion[] = L"0.2.4";
+constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
 HWND g_ip = nullptr;
@@ -122,6 +124,37 @@ std::wstring ExtractJsonString(const std::string& json, const std::string& key) 
     return std::wstring(value.begin(), value.end());
 }
 
+std::string ExtractJsonAscii(const std::string& json, const std::string& key) {
+    const std::wstring value = ExtractJsonString(json, key);
+    return std::string(value.begin(), value.end());
+}
+
+std::string DecodeGithubContent(const std::string& json) {
+    std::string encoded = ExtractJsonAscii(json, "content");
+    std::string normalized;
+    normalized.reserve(encoded.size());
+    for (size_t index = 0; index < encoded.size(); ++index) {
+        if (encoded[index] == '\\' && index + 1 < encoded.size() && encoded[index + 1] == 'n') {
+            ++index;
+        } else if (!std::isspace(static_cast<unsigned char>(encoded[index]))) {
+            normalized.push_back(encoded[index]);
+        }
+    }
+
+    DWORD decodedSize = 0;
+    if (normalized.empty() || !CryptStringToBinaryA(normalized.c_str(), 0, CRYPT_STRING_BASE64_ANY,
+                                                     nullptr, &decodedSize, nullptr, nullptr)) {
+        return {};
+    }
+    std::string decoded(decodedSize, '\0');
+    if (!CryptStringToBinaryA(normalized.c_str(), 0, CRYPT_STRING_BASE64_ANY,
+                              reinterpret_cast<BYTE*>(decoded.data()), &decodedSize, nullptr, nullptr)) {
+        return {};
+    }
+    decoded.resize(decodedSize);
+    return decoded;
+}
+
 std::filesystem::path TemporaryFile(const wchar_t* name) {
     wchar_t buffer[MAX_PATH]{};
     const DWORD length = GetTempPathW(MAX_PATH, buffer);
@@ -152,7 +185,14 @@ void CheckForUpdates(HWND window) {
         } else {
             std::ifstream input(manifestPath, std::ios::binary);
             std::string json((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-            const std::wstring version = ExtractJsonString(json, "version");
+            std::wstring version = ExtractJsonString(json, "version");
+            if (version.empty()) {
+                const std::string decodedManifest = DecodeGithubContent(json);
+                version = ExtractJsonString(decodedManifest, "version");
+                if (!version.empty()) {
+                    json = decodedManifest;
+                }
+            }
             if (version.empty()) {
                 result = L"Update manifest is invalid.";
             } else if (version == kCurrentVersion) {
