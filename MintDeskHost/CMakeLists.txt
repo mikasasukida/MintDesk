@@ -14,6 +14,7 @@ add_executable(MintDeskHost
         src/NvEncoder.cpp
         src/TcpServer.cpp
         src/InputController.cpp
+        src/ClipboardSyncServer.cpp
         src/VideoConverter.cpp
         src/GdiCapture.cpp
         src/MintDeskHost.rc
@@ -28,7 +29,10 @@ target_include_directories(MintDeskHost
 target_link_libraries(MintDeskHost
         d3d11
         dxgi
+        gdiplus
         gdi32
+        ole32
+        shell32
         user32
         ws2_32
 )

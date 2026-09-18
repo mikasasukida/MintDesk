@@ -3,6 +3,7 @@
 #include "VideoConverter.h"
 #include "GdiCapture.h"
 #include "InputController.h"
+#include "ClipboardSyncServer.h"
 
 #include <windows.h>
 #include <d3d11.h>
@@ -477,6 +478,7 @@ bool CopyToCachedTexture(
 int main() {
     constexpr uint16_t kPort = 9000;
     constexpr uint16_t kInputPort = 9001;
+    constexpr uint16_t kClipboardPort = 9002;
 
     SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
     std::cout.setf(std::ios::unitbuf);
@@ -584,6 +586,7 @@ int main() {
 
     TcpServer server;
     InputController inputController;
+    ClipboardSyncServer clipboardSyncServer;
 
     if (!server.start(kPort)) {
         SafeRelease(duplication);
@@ -594,6 +597,15 @@ int main() {
     }
 
     if (!inputController.start(kInputPort, width, height)) {
+        SafeRelease(duplication);
+        SafeRelease(context);
+        SafeRelease(device);
+        SafeRelease(adapter);
+        return 1;
+    }
+
+    if (!clipboardSyncServer.start(kClipboardPort)) {
+        inputController.stop();
         SafeRelease(duplication);
         SafeRelease(context);
         SafeRelease(device);
@@ -824,6 +836,7 @@ int main() {
         log("Client socket closed; back to Waiting for client.");
     }
 
+    clipboardSyncServer.stop();
     inputController.stop();
     SafeRelease(duplication);
     SafeRelease(context);

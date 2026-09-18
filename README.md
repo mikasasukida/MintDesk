@@ -10,9 +10,12 @@ MintDesk is an experimental remote desktop/control project for personal campus-n
 - Android Kotlin client with MediaCodec decoding.
 - TCP video stream on port `9000`.
 - TCP input control on port `9001`.
+- TCP clipboard/file sync on port `9002`.
 - Mouse, keyboard, wheel, right click, function keys, and game-mode relative mouse.
 - Local saved device card on Android.
 - Host-side configurable stream resolution and FPS.
+- Bidirectional clipboard text, screenshot, and file transfer.
+- Android `F10` file panel for received files and sending files back to Windows.
 
 ## Project Layout
 
@@ -44,6 +47,12 @@ Host config file:
 ```ini
 resolution=1920x1200
 fps=60
+```
+
+Files sent from Android are saved on Windows under:
+
+```text
+D:\MintDesk\Received
 ```
 
 Supported resolution presets:

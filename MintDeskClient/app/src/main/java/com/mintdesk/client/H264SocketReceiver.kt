@@ -31,6 +31,9 @@ class H264SocketReceiver(
     @Volatile
     private var controlSocket: Socket? = null
 
+    @Volatile
+    private var clipboardReceiver: ClipboardDataReceiver? = null
+
     private val outputLock = Any()
     private val controlExecutor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "MintDesk-ControlSender")
@@ -49,8 +52,10 @@ class H264SocketReceiver(
         running = false
         socket?.close()
         controlSocket?.close()
+        clipboardReceiver?.stop()
         socket = null
         controlSocket = null
+        clipboardReceiver = null
         controlExecutor.shutdownNow()
         worker?.interrupt()
         worker = null
@@ -159,6 +164,11 @@ class H264SocketReceiver(
         }
     }
 
+    fun sendFile(uri: android.net.Uri, displayName: String, mimeType: String?) {
+        clipboardReceiver?.sendFile(uri, displayName, mimeType)
+            ?: onStatus("Clipboard channel is not connected.")
+    }
+
     private fun writeHeader(packet: ByteBuffer, type: Int, payloadSize: Int) {
         packet.put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'I'.code.toByte(), 'N'.code.toByte()))
         packet.putShort(PROTOCOL_VERSION.toShort())
@@ -213,6 +223,7 @@ class H264SocketReceiver(
             Log.i(TAG, "TCP connected to $host:$port")
             onStatus("Connected. Waiting for H.264...")
             connectControlSocket()
+            connectClipboardChannel()
 
             decoder = MediaCodecDecoder(
                 surface = surface,
@@ -270,6 +281,7 @@ class H264SocketReceiver(
             }
         } finally {
             decoder?.close()
+            clipboardReceiver?.stop()
             controlSocket?.close()
             socket?.close()
             if (boundToWifi) {
@@ -278,6 +290,7 @@ class H264SocketReceiver(
             }
             socket = null
             controlSocket = null
+            clipboardReceiver = null
             running = false
             onStopped()
         }
@@ -292,6 +305,19 @@ class H264SocketReceiver(
         controlSocket = client
         Log.i(TAG, "Control connected to $host:$controlPort")
         onStatus("Video + control connected.")
+    }
+
+    private fun connectClipboardChannel() {
+        val clipboardPort = port + 2
+        clipboardReceiver?.stop()
+        clipboardReceiver = ClipboardDataReceiver(
+            context = context,
+            host = host,
+            port = clipboardPort,
+            onStatus = onStatus
+        ).also { receiver ->
+            receiver.start()
+        }
     }
 
     private fun findWifiNetwork(): Network? {

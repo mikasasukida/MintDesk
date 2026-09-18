@@ -1,8 +1,15 @@
 package com.mintdesk.client
 
 import android.app.Activity
+import android.content.ContentUris
+import android.content.Intent
 import android.graphics.SurfaceTexture
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.os.Handler
 import android.os.Looper
 import android.text.Editable
@@ -21,6 +28,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
+import java.io.File
 
 class MainActivity : Activity() {
     private lateinit var videoView: TextureView
@@ -43,6 +51,11 @@ class MainActivity : Activity() {
     private lateinit var deviceAddressText: TextView
     private lateinit var deviceStatusText: TextView
     private lateinit var deviceConnectButton: Button
+    private lateinit var filePanel: LinearLayout
+    private lateinit var filePanelTitle: TextView
+    private lateinit var filePanelStatus: TextView
+    private lateinit var fileListContainer: LinearLayout
+    private lateinit var sendFileButton: Button
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var surface: Surface? = null
@@ -65,6 +78,8 @@ class MainActivity : Activity() {
     private var lastTouchY = 0f
     private var touchMoved = false
     private var hasLastGameMouse = false
+    private var remoteFullscreen = false
+    private var filePanelVisible = false
     private var lastGameMouseX = 0f
     private var lastGameMouseY = 0f
 
@@ -92,6 +107,11 @@ class MainActivity : Activity() {
         deviceAddressText = findViewById(R.id.deviceAddressText)
         deviceStatusText = findViewById(R.id.deviceStatusText)
         deviceConnectButton = findViewById(R.id.deviceConnectButton)
+        filePanel = findViewById(R.id.filePanel)
+        filePanelTitle = findViewById(R.id.filePanelTitle)
+        filePanelStatus = findViewById(R.id.filePanelStatus)
+        fileListContainer = findViewById(R.id.fileListContainer)
+        sendFileButton = findViewById(R.id.sendFileButton)
 
         loadSavedDevice()
 
@@ -172,6 +192,16 @@ class MainActivity : Activity() {
 
         gameModeButton.setOnClickListener { toggleGameMode() }
 
+        findViewById<Button>(R.id.refreshFilesButton).setOnClickListener {
+            refreshFileList()
+        }
+        findViewById<Button>(R.id.closeFilesButton).setOnClickListener {
+            hideFilePanel()
+        }
+        sendFileButton.setOnClickListener {
+            chooseFileForPc()
+        }
+
         keyboardInput.setOnKeyListener { _, _, keyEvent ->
             val activeReceiver = receiver ?: return@setOnKeyListener false
             handleRemoteKeyEvent(activeReceiver, keyEvent)
@@ -208,6 +238,10 @@ class MainActivity : Activity() {
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         val activeReceiver = receiver
+
+        if (filePanelVisible && isRawPointInsideView(filePanel, event.rawX, event.rawY)) {
+            return super.dispatchTouchEvent(event)
+        }
 
         if (activeReceiver != null && ::videoContainer.isInitialized) {
             if (gameModeEnabled) {
@@ -338,6 +372,21 @@ class MainActivity : Activity() {
         val activeReceiver = receiver
 
         if (activeReceiver != null && !isEditingConnectionFields()) {
+            if (event.keyCode == KeyEvent.KEYCODE_F11 ||
+                event.keyCode == KeyEvent.KEYCODE_F10
+            ) {
+                if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                    if (event.keyCode == KeyEvent.KEYCODE_F11) {
+                        toggleRemoteFullscreen()
+                    } else if (remoteFullscreen) {
+                        toggleFilePanel()
+                    }
+                }
+                return true
+            }
+        }
+
+        if (activeReceiver != null && !isEditingConnectionFields()) {
             if (event.keyCode == KeyEvent.KEYCODE_FORWARD_DEL) {
                 if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
                     toggleGameMode()
@@ -361,6 +410,20 @@ class MainActivity : Activity() {
         }
 
         super.onBackPressed()
+    }
+
+    @Deprecated("Deprecated in Android API  Activity result API is sufficient for this legacy project.")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != FILE_PICK_REQUEST || resultCode != RESULT_OK) {
+            return
+        }
+
+        val uri = data?.data ?: return
+        val name = queryDisplayName(uri) ?: "mintdesk-file.bin"
+        val mimeType = contentResolver.getType(uri)
+        receiver?.sendFile(uri, name, mimeType)
+        filePanelStatus.text = "Sending $name to PC..."
     }
 
     override fun onDestroy() {
@@ -519,6 +582,11 @@ class MainActivity : Activity() {
         Log.i(TAG, "status: $message")
         runOnUiThread {
             statusText.text = message
+            if (::filePanel.isInitialized && filePanelVisible &&
+                (message.startsWith("File sent") || message.startsWith("File send failed"))
+            ) {
+                filePanelStatus.text = message
+            }
         }
     }
 
@@ -542,6 +610,9 @@ class MainActivity : Activity() {
             0
         )
 
+        remoteFullscreen = true
+        filePanelVisible = false
+        filePanel.visibility = View.GONE
         controlBar.visibility = View.GONE
         devicePanel.visibility = View.GONE
         keyboardInput.visibility = View.GONE
@@ -555,12 +626,208 @@ class MainActivity : Activity() {
             return
         }
 
+        remoteFullscreen = false
+        filePanelVisible = false
+        filePanel.visibility = View.GONE
         controlBar.visibility = View.VISIBLE
         devicePanel.visibility = View.VISIBLE
         keyboardInput.visibility = View.VISIBLE
         statusText.visibility = View.VISIBLE
         window.decorView.systemUiVisibility = 0
         releasePointerCapture()
+    }
+
+    private fun toggleRemoteFullscreen() {
+        remoteFullscreen = !remoteFullscreen
+        if (filePanelVisible) {
+            filePanelVisible = false
+            filePanel.visibility = View.GONE
+        }
+
+        controlBar.visibility = if (remoteFullscreen) View.GONE else View.VISIBLE
+        statusText.visibility = if (remoteFullscreen) View.GONE else View.VISIBLE
+        keyboardInput.visibility = View.GONE
+        window.decorView.systemUiVisibility = if (remoteFullscreen) FULLSCREEN_FLAGS else 0
+
+        if (remoteFullscreen) {
+            videoContainer.requestFocus()
+            applyPointerCapture()
+            setStatus("Fullscreen. F10: files, F11: exit fullscreen.")
+        } else {
+            releasePointerCapture()
+            setStatus("Windowed remote mode. F11: fullscreen.")
+        }
+    }
+
+    private fun toggleFilePanel() {
+        if (filePanelVisible) {
+            hideFilePanel()
+        } else {
+            filePanelVisible = true
+            filePanel.visibility = View.VISIBLE
+            refreshFileList()
+        }
+    }
+
+    private fun chooseFileForPc() {
+        if (receiver == null) {
+            setStatus("Connect before sending a file.")
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        startActivityForResult(intent, FILE_PICK_REQUEST)
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null
+        )?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                return cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME))
+            }
+        }
+        return uri.lastPathSegment?.substringAfterLast('/')
+    }
+
+    private fun hideFilePanel() {
+        filePanelVisible = false
+        filePanel.visibility = View.GONE
+        videoContainer.requestFocus()
+    }
+
+    private data class RemoteFile(
+        val name: String,
+        val mimeType: String,
+        val uri: Uri
+    )
+
+    private fun refreshFileList() {
+        filePanelStatus.text = "Loading files..."
+        Thread {
+            val files = queryReceivedFiles()
+            runOnUiThread {
+                if (!filePanelVisible) return@runOnUiThread
+                renderFileList(files)
+            }
+        }.start()
+    }
+
+    private fun queryReceivedFiles(): List<RemoteFile> {
+        val result = mutableListOf<RemoteFile>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val projection = arrayOf(
+                MediaStore.Downloads._ID,
+                MediaStore.Downloads.DISPLAY_NAME,
+                MediaStore.Downloads.MIME_TYPE
+            )
+            val selection = "${MediaStore.Downloads.RELATIVE_PATH}=?"
+            val selectionArgs = arrayOf("${Environment.DIRECTORY_DOWNLOADS}/MintDesk/")
+            contentResolver.query(
+                MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                projection,
+                selection,
+                selectionArgs,
+                "${MediaStore.Downloads.DATE_ADDED} DESC"
+            )?.use { cursor ->
+                val idIndex = cursor.getColumnIndexOrThrow(MediaStore.Downloads._ID)
+                val nameIndex = cursor.getColumnIndexOrThrow(MediaStore.Downloads.DISPLAY_NAME)
+                val mimeIndex = cursor.getColumnIndexOrThrow(MediaStore.Downloads.MIME_TYPE)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idIndex)
+                    val name = cursor.getString(nameIndex) ?: "Unnamed file"
+                    val mime = cursor.getString(mimeIndex) ?: "application/octet-stream"
+                    result += RemoteFile(
+                        name,
+                        mime,
+                        ContentUris.withAppendedId(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                            id
+                        )
+                    )
+                }
+            }
+        }
+
+        if (result.isEmpty()) {
+            val fallbackDir = File(
+                getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS),
+                "MintDesk"
+            )
+            fallbackDir.listFiles()
+                ?.sortedByDescending { it.lastModified() }
+                ?.forEach { file ->
+                    result += RemoteFile(
+                        file.name,
+                        mimeTypeForName(file.name),
+                        Uri.fromFile(file)
+                    )
+                }
+        }
+        return result
+    }
+
+    private fun renderFileList(files: List<RemoteFile>) {
+        fileListContainer.removeAllViews()
+        filePanelStatus.text = if (files.isEmpty()) {
+            "No files in Downloads/MintDesk."
+        } else {
+            "${files.size} received item(s)"
+        }
+
+        files.forEach { file ->
+            val row = TextView(this).apply {
+                text = "${file.name}\n${file.mimeType}"
+                setTextColor(android.graphics.Color.WHITE)
+                textSize = 15f
+                setPadding(14, 12, 14, 12)
+                setBackgroundColor(android.graphics.Color.rgb(33, 38, 45))
+                isClickable = true
+                setOnClickListener { openReceivedFile(file) }
+            }
+            val params = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            )
+            params.setMargins(0, 0, 0, 8)
+            fileListContainer.addView(row, params)
+        }
+    }
+
+    private fun openReceivedFile(file: RemoteFile) {
+        if (file.uri.scheme == "file") {
+            Toast.makeText(this, "This file is not publicly shareable yet.", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(file.uri, file.mimeType)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        runCatching { startActivity(intent) }
+            .onFailure {
+                Toast.makeText(this, "No app can open ${file.name}", Toast.LENGTH_SHORT).show()
+            }
+    }
+
+    private fun mimeTypeForName(name: String): String {
+        val lower = name.lowercase()
+        return when {
+            lower.endsWith(".png") -> "image/png"
+            lower.endsWith(".jpg") || lower.endsWith(".jpeg") -> "image/jpeg"
+            lower.endsWith(".gif") -> "image/gif"
+            lower.endsWith(".txt") -> "text/plain"
+            lower.endsWith(".pdf") -> "application/pdf"
+            lower.endsWith(".zip") -> "application/zip"
+            else -> "application/octet-stream"
+        }
     }
 
     private fun updateGameModeUi() {
@@ -1059,6 +1326,18 @@ class MainActivity : Activity() {
             rawY <= videoLocation[1] + videoView.height
     }
 
+    private fun isRawPointInsideView(view: View, rawX: Float, rawY: Float): Boolean {
+        if (view.visibility != View.VISIBLE || view.width <= 0 || view.height <= 0) {
+            return false
+        }
+        val location = IntArray(2)
+        view.getLocationOnScreen(location)
+        return rawX >= location[0] &&
+            rawY >= location[1] &&
+            rawX <= location[0] + view.width &&
+            rawY <= location[1] + view.height
+    }
+
     private fun isMouseLikeEvent(event: MotionEvent): Boolean {
         return event.isFromSource(InputDevice.SOURCE_MOUSE) ||
             event.isFromSource(InputDevice.SOURCE_MOUSE_RELATIVE) ||
@@ -1288,6 +1567,7 @@ class MainActivity : Activity() {
         private const val PREF_HOST = "host"
         private const val PREF_PORT = "port"
         private const val PREF_LAST_SAVED_AT = "last_saved_at"
+        private const val FILE_PICK_REQUEST = 4102
         private const val VIDEO_WIDTH = 2560f
         private const val VIDEO_HEIGHT = 1600f
         private const val TOUCHPAD_SENSITIVITY = 1.35f
