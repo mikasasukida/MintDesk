@@ -178,7 +178,7 @@ void CheckForUpdates(HWND window) {
                             script << L"while (Get-Process -Id " << GetCurrentProcessId() << L" -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 300 }\n";
                             script << L"Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue\n";
                             script << L"Expand-Archive -LiteralPath $zip -DestinationPath $stage -Force\n";
-                            script << L"Copy-Item -Path (Join-Path $stage '*') -Destination $app -Recurse -Force\n";
+                            script << L"Get-ChildItem -LiteralPath $stage | Where-Object { $_.Name -ne 'MintDeskHost.ini' } | Copy-Item -Destination $app -Recurse -Force\n";
                             script << L"Start-Process (Join-Path $app 'MintDeskHostApp.exe')\n";
                             script.close();
 
