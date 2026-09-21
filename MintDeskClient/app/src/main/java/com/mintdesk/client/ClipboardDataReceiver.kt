@@ -16,6 +16,7 @@ import java.net.Socket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 class ClipboardDataReceiver(
@@ -33,6 +34,13 @@ class ClipboardDataReceiver(
 
     private var worker: Thread? = null
     private val outputLock = Any()
+    private val pendingOutgoingFiles = ConcurrentHashMap<String, PendingOutgoingFile>()
+
+    private data class PendingOutgoingFile(
+        val name: String,
+        val type: Int,
+        val payload: ByteArray
+    )
 
     fun start() {
         if (running) return
@@ -83,25 +91,25 @@ class ClipboardDataReceiver(
                     TYPE_FILE
                 }
 
+                pendingOutgoingFiles[cleanName] = PendingOutgoingFile(cleanName, type, payload)
                 val header = ByteBuffer.allocate(HEADER_SIZE)
                     .order(ByteOrder.LITTLE_ENDIAN)
                     .put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'C'.code.toByte(), 'L'.code.toByte()))
                     .putShort(PROTOCOL_VERSION.toShort())
-                    .putShort(type.toShort())
+                    .putShort(TYPE_FILE_OFFER.toShort())
                     .putInt(nameBytes.size)
                     .putLong(payload.size.toLong())
-                    .putInt(0)
+                    .putInt(FILE_OFFER_FLAG)
                     .array()
 
                 synchronized(outputLock) {
                     val output = client.getOutputStream()
                     writeAll(output, header)
                     writeAll(output, nameBytes)
-                    writeAll(output, payload)
                     output.flush()
                 }
-                onStatus("File sent to PC: $cleanName")
-                Log.i(TAG, "Sent file $cleanName (${payload.size} bytes)")
+                onStatus("File offer sent. Waiting for PC approval: $cleanName")
+                Log.i(TAG, "Offered file $cleanName (${payload.size} bytes)")
             }.onFailure { error ->
                 Log.w(TAG, "Clipboard file send failed", error)
                 onStatus("File send failed: ${error.message ?: error.javaClass.simpleName}")
@@ -194,6 +202,11 @@ class ClipboardDataReceiver(
                     defaultNameForType(type)
                 }
 
+                if (type == TYPE_FILE_REQUEST) {
+                    handleFileRequest(name, flags)
+                    continue
+                }
+
                 if (type == TYPE_FILE_OFFER) {
                     onFileOffer(name, payloadSize)
                     continue
@@ -211,6 +224,42 @@ class ClipboardDataReceiver(
             socket?.close()
             socket = null
             running = false
+        }
+    }
+
+    private fun handleFileRequest(name: String, flags: Int) {
+        val pending = pendingOutgoingFiles.remove(name)
+        if (flags == 0) {
+            onStatus("PC declined file: $name")
+            return
+        }
+        if (pending == null) {
+            onStatus("File offer expired: $name")
+            return
+        }
+
+        runCatching {
+            val nameBytes = pending.name.toByteArray(StandardCharsets.UTF_8)
+            val header = ByteBuffer.allocate(HEADER_SIZE)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'C'.code.toByte(), 'L'.code.toByte()))
+                .putShort(PROTOCOL_VERSION.toShort())
+                .putShort(pending.type.toShort())
+                .putInt(nameBytes.size)
+                .putLong(pending.payload.size.toLong())
+                .putInt(0)
+                .array()
+            synchronized(outputLock) {
+                val output = socket?.getOutputStream() ?: error("Clipboard channel is closed")
+                writeAll(output, header)
+                writeAll(output, nameBytes)
+                writeAll(output, pending.payload)
+                output.flush()
+            }
+            onStatus("File sent to PC: ${pending.name}")
+            Log.i(TAG, "Sent approved file ${pending.name} (${pending.payload.size} bytes)")
+        }.onFailure { error ->
+            onStatus("File send failed: ${error.message ?: error.javaClass.simpleName}")
         }
     }
 
@@ -328,6 +377,7 @@ class ClipboardDataReceiver(
         private const val TYPE_TEXT = 1
         private const val TYPE_IMAGE_PNG = 2
         private const val TYPE_FILE = 3
+        private const val FILE_OFFER_FLAG = 1
         private const val TYPE_FILE_OFFER = 4
         private const val TYPE_FILE_REQUEST = 5
         private const val MAX_NAME_BYTES = 4096

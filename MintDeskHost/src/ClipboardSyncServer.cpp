@@ -404,6 +404,23 @@ bool ClipboardSyncServer::sendItem(SOCKET clientSocket, const ClipboardItem& ite
     return true;
 }
 
+bool ClipboardSyncServer::sendFileRequest(SOCKET clientSocket, const std::string& name, bool accepted) {
+    std::lock_guard sendLock(sendMutex_);
+    std::vector<uint8_t> nameBytes(name.begin(), name.end());
+    std::vector<uint8_t> header;
+    header.reserve(kHeaderSize);
+    header.insert(header.end(), kMagic.begin(), kMagic.end());
+    WriteLe16(header, kVersion);
+    WriteLe16(header, kTypeFileRequest);
+    WriteLe32(header, static_cast<uint32_t>(nameBytes.size()));
+    WriteLe64(header, 0);
+    WriteLe32(header, accepted ? 1u : 0u);
+    if (!sendAll(clientSocket, header.data(), header.size())) {
+        return false;
+    }
+    return nameBytes.empty() || sendAll(clientSocket, nameBytes.data(), nameBytes.size());
+}
+
 bool ClipboardSyncServer::sendAll(SOCKET clientSocket, const void* data, size_t size) {
     const auto* bytes = static_cast<const uint8_t*>(data);
     size_t sentTotal = 0;
@@ -468,8 +485,8 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
 
     if (version != kVersion ||
         nameSize > 4096 ||
-        (type != kTypeText && type != kTypeImagePng && type != kTypeFile && type != kTypeFileRequest) ||
-        (type == kTypeFileRequest && payloadSize != 0)) {
+        (type != kTypeText && type != kTypeImagePng && type != kTypeFile && type != kTypeFileOffer) ||
+        (type == kTypeFileOffer && payloadSize == 0)) {
         std::cerr << "Clipboard receive rejected: version=" << version
                   << " type=" << type
                   << " name=" << nameSize
@@ -486,24 +503,21 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
         return false;
     }
 
-    if (type == kTypeFileRequest) {
-        ClipboardItem requested;
-        bool found = false;
-        {
-            std::lock_guard lock(pendingMutex_);
-            const auto match = std::find_if(pendingFiles_.begin(), pendingFiles_.end(),
-                [&name](const ClipboardItem& item) { return item.name == name; });
-            if (match != pendingFiles_.end()) {
-                requested = *match;
-                pendingFiles_.erase(match);
-                found = true;
-            }
+    if (type == kTypeFileOffer) {
+        std::wstring wideName;
+        int wideSize = MultiByteToWideChar(CP_UTF8, 0, name.data(), static_cast<int>(name.size()), nullptr, 0);
+        if (wideSize > 0) {
+            wideName.resize(static_cast<size_t>(wideSize));
+            MultiByteToWideChar(CP_UTF8, 0, name.data(), static_cast<int>(name.size()), wideName.data(), wideSize);
         }
-        if (!found) {
-            std::cerr << "Clipboard file request not found: " << name << "\n";
-            return true;
+        const std::wstring prompt = L"Android wants to send:\n\n" + wideName +
+            L"\n\nSize: " + std::to_wstring(payloadSize) + L" bytes\n\nDownload to D:\\MintDesk\\Received?";
+        const int choice = MessageBoxW(nullptr, prompt.c_str(), L"MintDesk file transfer", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
+        const bool accepted = choice == IDYES;
+        if (!sendFileRequest(clientSocket, name, accepted)) {
+            return false;
         }
-        return sendItem(clientSocket, requested);
+        return true;
     }
 
     std::vector<uint8_t> payload(static_cast<size_t>(payloadSize));
