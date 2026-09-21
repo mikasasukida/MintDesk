@@ -28,7 +28,7 @@ constexpr int kUpdateButton = 1006;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.7";
+constexpr wchar_t kCurrentVersion[] = L"0.2.8";
 constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
@@ -41,6 +41,16 @@ HFONT g_titleFont = nullptr;
 HFONT g_bodyFont = nullptr;
 HBRUSH g_panelBrush = nullptr;
 bool g_updateRunning = false;
+bool g_dropZoneMinimized = false;
+
+struct IncomingOffer {
+    std::wstring id;
+    std::string rawName;
+    std::wstring name;
+    uint64_t size = 0;
+};
+
+std::vector<IncomingOffer> g_incomingOffers;
 
 std::filesystem::path AppDirectory() {
     wchar_t buffer[MAX_PATH]{};
@@ -54,6 +64,36 @@ std::filesystem::path HostExecutable() {
 
 std::filesystem::path ReceivedDirectory() {
     return L"D:\\MintDesk\\Received";
+}
+
+std::filesystem::path PendingDirectory() {
+    return L"D:\\MintDesk\\Pending";
+}
+
+std::wstring Utf8ToWide(const std::string& value) {
+    if (value.empty()) {
+        return {};
+    }
+    const int length = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
+    if (length <= 0) {
+        return std::wstring(value.begin(), value.end());
+    }
+    std::wstring result(static_cast<size_t>(length), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), length);
+    return result;
+}
+
+std::string WideToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+    const int length = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    if (length <= 0) {
+        return std::string(value.begin(), value.end());
+    }
+    std::string result(static_cast<size_t>(length), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), length, nullptr, nullptr);
+    return result;
 }
 
 std::wstring CurrentIPv4() {
@@ -249,6 +289,63 @@ void CheckForUpdates(HWND window) {
     }).detach();
 }
 
+void RefreshIncomingOffers() {
+    std::vector<IncomingOffer> offers;
+    std::error_code error;
+    const auto directory = PendingDirectory();
+    if (std::filesystem::exists(directory, error)) {
+        for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+            if (error || !entry.is_regular_file(error) || entry.path().extension() != L".txt") {
+                continue;
+            }
+            std::ifstream file(entry.path(), std::ios::binary);
+            std::string rawName;
+            std::string rawSize;
+            std::getline(file, rawName);
+            std::getline(file, rawSize);
+            if (rawName.empty()) {
+                continue;
+            }
+            IncomingOffer offer;
+            offer.id = entry.path().stem().wstring();
+            offer.rawName = rawName;
+            offer.name = Utf8ToWide(rawName);
+            try {
+                offer.size = std::stoull(rawSize);
+            } catch (...) {
+                offer.size = 0;
+            }
+            offers.push_back(std::move(offer));
+        }
+    }
+    g_incomingOffers = std::move(offers);
+    if (g_dropZone) {
+        InvalidateRect(g_dropZone, nullptr, TRUE);
+    }
+}
+
+void AcceptIncomingOffer(size_t index) {
+    if (index >= g_incomingOffers.size()) {
+        return;
+    }
+    std::error_code error;
+    const auto directory = PendingDirectory();
+    std::filesystem::create_directories(directory, error);
+    const auto& offer = g_incomingOffers[index];
+    std::ofstream command(directory / (L"accept_" + offer.id + L".cmd"), std::ios::binary);
+    if (command) {
+        command << offer.rawName << "\n";
+        SetStatus(L"Download requested: " + offer.name);
+    }
+}
+
+std::wstring FormatBytes(uint64_t size) {
+    if (size < 1024) return std::to_wstring(size) + L" B";
+    if (size < 1024 * 1024) return std::to_wstring(size / 1024) + L" KB";
+    if (size < 1024 * 1024 * 1024) return std::to_wstring(size / (1024 * 1024)) + L" MB";
+    return std::to_wstring(size / (1024 * 1024 * 1024)) + L" GB";
+}
+
 void RefreshUi() {
     if (g_ip) {
         SetWindowTextW(g_ip, (L"IPv4  " + CurrentIPv4() + L"    |    Video 9000    Input 9001    Files 9002").c_str());
@@ -258,6 +355,7 @@ void RefreshUi() {
     EnableWindow(g_start, running ? FALSE : TRUE);
     EnableWindow(g_stop, running ? TRUE : FALSE);
     SetStatus(running ? L"Host is running and ready for connections" : L"Host is stopped");
+    RefreshIncomingOffers();
 }
 
 void StartHost() {
@@ -382,17 +480,33 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
         DragAcceptFiles(window, TRUE);
         return 0;
     case WM_LBUTTONDOWN: {
-        dragOffset.x = static_cast<short>(LOWORD(lParam));
-        dragOffset.y = static_cast<short>(HIWORD(lParam));
-        SetCapture(window);
+        const int x = static_cast<short>(LOWORD(lParam));
+        const int y = static_cast<short>(HIWORD(lParam));
+        RECT bounds{};
+        GetClientRect(window, &bounds);
+        if (y < 34) {
+            if (x > bounds.right - 34) {
+                g_dropZoneMinimized = !g_dropZoneMinimized;
+                SetWindowPos(window, nullptr, 0, 0, 540, g_dropZoneMinimized ? 34 : 240,
+                             SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                InvalidateRect(window, nullptr, TRUE);
+            } else {
+                dragOffset.x = x;
+                dragOffset.y = y;
+                SetCapture(window);
+            }
+        } else if (!g_dropZoneMinimized && x >= 282) {
+            const size_t index = static_cast<size_t>((y - 48) / 58);
+            if (index < g_incomingOffers.size()) {
+                AcceptIncomingOffer(index);
+            }
+        }
         return 0;
     }
     case WM_MOUSEMOVE:
         if (GetCapture() == window && (wParam & MK_LBUTTON)) {
             POINT cursor{};
             GetCursorPos(&cursor);
-            HWND parent = GetParent(window);
-            ScreenToClient(parent, &cursor);
             SetWindowPos(window, nullptr, cursor.x - dragOffset.x, cursor.y - dragOffset.y, 0, 0,
                          SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
@@ -411,23 +525,49 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
         HDC dc = BeginPaint(window, &paint);
         RECT bounds{};
         GetClientRect(window, &bounds);
-        HBRUSH background = CreateSolidBrush(RGB(30, 39, 50));
+        HBRUSH background = CreateSolidBrush(RGB(22, 27, 34));
         FillRect(dc, &bounds, background);
         DeleteObject(background);
-        HPEN border = CreatePen(PS_DASH, 2, RGB(88, 166, 255));
-        HGDIOBJ oldPen = SelectObject(dc, border);
-        HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-        Rectangle(dc, 8, 8, bounds.right - 8, bounds.bottom - 8);
-        SelectObject(dc, oldBrush);
-        SelectObject(dc, oldPen);
-        DeleteObject(border);
         SetBkMode(dc, TRANSPARENT);
         SetTextColor(dc, RGB(225, 235, 245));
         SelectObject(dc, g_bodyFont);
-        RECT text = bounds;
-        InflateRect(&text, -18, -18);
-        DrawTextW(dc, L"拖到这里上传文件\n\n大文件和小文件都支持", -1, &text,
-                  DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+        RECT title = {12, 4, bounds.right - 38, 30};
+        DrawTextW(dc, L"MintDesk Files", -1, &title, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        RECT minimize = {bounds.right - 32, 4, bounds.right - 8, 30};
+        DrawTextW(dc, g_dropZoneMinimized ? L"+" : L"-", -1, &minimize, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        if (!g_dropZoneMinimized) {
+            HPEN border = CreatePen(PS_DASH, 2, RGB(88, 166, 255));
+            HGDIOBJ oldPen = SelectObject(dc, border);
+            HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
+            Rectangle(dc, 10, 44, 272, bounds.bottom - 10);
+            SelectObject(dc, oldBrush);
+            SelectObject(dc, oldPen);
+            DeleteObject(border);
+            RECT uploadText = {22, 76, 260, bounds.bottom - 24};
+            DrawTextW(dc, L"拖到这里上传文件\n\n大文件和小文件都支持", -1, &uploadText,
+                      DT_CENTER | DT_VCENTER | DT_WORDBREAK);
+            RECT rightTitle = {294, 48, bounds.right - 12, 72};
+            DrawTextW(dc, L"平板发来的文件", -1, &rightTitle, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            if (g_incomingOffers.empty()) {
+                RECT empty = {294, 88, bounds.right - 12, 130};
+                DrawTextW(dc, L"暂无待下载文件", -1, &empty, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            } else {
+                for (size_t index = 0; index < g_incomingOffers.size() && index < 3; ++index) {
+                    const int top = 78 + static_cast<int>(index) * 52;
+                    RECT name = {294, top, bounds.right - 120, top + 24};
+                    DrawTextW(dc, g_incomingOffers[index].name.c_str(), -1, &name,
+                              DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+                    RECT size = {294, top + 22, bounds.right - 120, top + 46};
+                    const auto sizeText = FormatBytes(g_incomingOffers[index].size);
+                    DrawTextW(dc, sizeText.c_str(), -1, &size, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                    RECT download = {bounds.right - 110, top + 5, bounds.right - 14, top + 40};
+                    HBRUSH button = CreateSolidBrush(RGB(44, 96, 150));
+                    FillRect(dc, &download, button);
+                    DeleteObject(button);
+                    DrawTextW(dc, L"DOWNLOAD", -1, &download, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+                }
+            }
+        }
         EndPaint(window, &paint);
         return 0;
     }
@@ -476,7 +616,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wParam, LPARAM lPa
         g_status = makeStatic(L"Host is stopped", 38, 238, 430, 32, g_bodyFont);
         g_dropZone = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_TOPMOST, L"MintDeskDropZone", nullptr,
                                      WS_POPUP | WS_BORDER,
-                                     0, 0, 220, 160, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+                                     0, 0, 540, 240, nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
         g_start = makeButton(L"Start Host", kStartButton, 38, 302, 150);
         g_stop = makeButton(L"Stop", kStopButton, 202, 302, 120);
         makeButton(L"Open received files", kFilesButton, 38, 378, 210);
@@ -602,8 +742,8 @@ int WINAPI WinMain(HINSTANCE instance, HINSTANCE, LPSTR, int showCommand) {
     if (g_dropZone) {
         RECT hostBounds{};
         GetWindowRect(window, &hostBounds);
-        SetWindowPos(g_dropZone, HWND_TOPMOST, hostBounds.right - 245, hostBounds.top + 120,
-                     220, 160, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+        SetWindowPos(g_dropZone, HWND_TOPMOST, hostBounds.right - 565, hostBounds.top + 120,
+                     540, 240, SWP_SHOWWINDOW | SWP_NOACTIVATE);
     }
     MSG message{};
     while (GetMessageW(&message, nullptr, 0, 0) > 0) {

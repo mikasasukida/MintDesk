@@ -31,6 +31,7 @@ private:
     bool sendCurrentClipboard(SOCKET clientSocket, uint32_t& lastSequence);
     bool sendItem(SOCKET clientSocket, const ClipboardItem& item, bool includePayload = true, uint32_t flags = 0);
     bool sendFileRequest(SOCKET clientSocket, const std::string& name, bool accepted);
+    bool processFileDecisions(SOCKET clientSocket);
     bool sendAll(SOCKET clientSocket, const void* data, size_t size);
     bool receiveItem(SOCKET clientSocket);
     bool receiveAll(SOCKET clientSocket, void* data, size_t size);

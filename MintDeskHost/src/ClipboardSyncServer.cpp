@@ -99,6 +99,25 @@ std::string WideToUtf8(const std::wstring& value) {
     return result;
 }
 
+std::filesystem::path PendingDirectory() {
+    return L"D:\\MintDesk\\Pending";
+}
+
+void WritePendingOffer(const std::string& name, uint64_t size) {
+    std::error_code error;
+    const auto directory = PendingDirectory();
+    std::filesystem::create_directories(directory, error);
+    if (error) {
+        return;
+    }
+    const auto offer = directory / (L"offer_" + std::to_wstring(GetTickCount64()) + L".txt");
+    std::ofstream file(offer, std::ios::binary);
+    if (!file) {
+        return;
+    }
+    file << name << "\n" << size << "\n";
+}
+
 bool GetPngEncoderClsid(CLSID& clsid) {
     UINT count = 0;
     UINT bytes = 0;
@@ -311,6 +330,9 @@ void ClipboardSyncServer::run() {
         });
 
         while (running_ && readerRunning) {
+            if (!processFileDecisions(clientSocket)) {
+                break;
+            }
             if (!sendCurrentClipboard(clientSocket, lastSequence)) {
                 break;
             }
@@ -421,6 +443,41 @@ bool ClipboardSyncServer::sendFileRequest(SOCKET clientSocket, const std::string
     return nameBytes.empty() || sendAll(clientSocket, nameBytes.data(), nameBytes.size());
 }
 
+bool ClipboardSyncServer::processFileDecisions(SOCKET clientSocket) {
+    std::error_code error;
+    const auto directory = PendingDirectory();
+    if (!std::filesystem::exists(directory, error)) {
+        return true;
+    }
+    for (const auto& entry : std::filesystem::directory_iterator(directory, error)) {
+        if (error || !entry.is_regular_file(error) || entry.path().extension() != L".cmd") {
+            continue;
+        }
+        std::ifstream file(entry.path(), std::ios::binary);
+        std::string name((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        while (!name.empty() && (name.back() == '\r' || name.back() == '\n')) {
+            name.pop_back();
+        }
+        if (!name.empty() && !sendFileRequest(clientSocket, name, true)) {
+            return false;
+        }
+        std::filesystem::remove(entry.path(), error);
+        for (const auto& offer : std::filesystem::directory_iterator(directory, error)) {
+            if (offer.path().extension() != L".txt") {
+                continue;
+            }
+            std::ifstream offerFile(offer.path(), std::ios::binary);
+            std::string offeredName;
+            std::getline(offerFile, offeredName);
+            if (offeredName == name) {
+                std::filesystem::remove(offer.path(), error);
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 bool ClipboardSyncServer::sendAll(SOCKET clientSocket, const void* data, size_t size) {
     const auto* bytes = static_cast<const uint8_t*>(data);
     size_t sentTotal = 0;
@@ -504,19 +561,7 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
     }
 
     if (type == kTypeFileOffer) {
-        std::wstring wideName;
-        int wideSize = MultiByteToWideChar(CP_UTF8, 0, name.data(), static_cast<int>(name.size()), nullptr, 0);
-        if (wideSize > 0) {
-            wideName.resize(static_cast<size_t>(wideSize));
-            MultiByteToWideChar(CP_UTF8, 0, name.data(), static_cast<int>(name.size()), wideName.data(), wideSize);
-        }
-        const std::wstring prompt = L"Android wants to send:\n\n" + wideName +
-            L"\n\nSize: " + std::to_wstring(payloadSize) + L" bytes\n\nDownload to D:\\MintDesk\\Received?";
-        const int choice = MessageBoxW(nullptr, prompt.c_str(), L"MintDesk file transfer", MB_YESNO | MB_ICONQUESTION | MB_SETFOREGROUND);
-        const bool accepted = choice == IDYES;
-        if (!sendFileRequest(clientSocket, name, accepted)) {
-            return false;
-        }
+        WritePendingOffer(name, payloadSize);
         return true;
     }
 
