@@ -25,10 +25,11 @@ constexpr int kFilesButton = 1003;
 constexpr int kConfigButton = 1004;
 constexpr int kRefreshButton = 1005;
 constexpr int kUpdateButton = 1006;
+constexpr int kDownloadButtonBase = 7000;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.8";
+constexpr wchar_t kCurrentVersion[] = L"0.2.9";
 constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
@@ -51,6 +52,7 @@ struct IncomingOffer {
 };
 
 std::vector<IncomingOffer> g_incomingOffers;
+std::vector<HWND> g_downloadButtons;
 
 std::filesystem::path AppDirectory() {
     wchar_t buffer[MAX_PATH]{};
@@ -320,6 +322,29 @@ void RefreshIncomingOffers() {
     }
     g_incomingOffers = std::move(offers);
     if (g_dropZone) {
+        for (HWND button : g_downloadButtons) {
+            DestroyWindow(button);
+        }
+        g_downloadButtons.clear();
+        if (!g_dropZoneMinimized) {
+            for (size_t index = 0; index < g_incomingOffers.size() && index < 3; ++index) {
+                HWND button = CreateWindowW(
+                    L"BUTTON",
+                    L"DOWNLOAD",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    414,
+                    83 + static_cast<int>(index) * 52,
+                    100,
+                    34,
+                    g_dropZone,
+                    reinterpret_cast<HMENU>(kDownloadButtonBase + index),
+                    GetModuleHandleW(nullptr),
+                    nullptr
+                );
+                SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(g_bodyFont), TRUE);
+                g_downloadButtons.push_back(button);
+            }
+        }
         InvalidateRect(g_dropZone, nullptr, TRUE);
     }
 }
@@ -489,6 +514,7 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                 g_dropZoneMinimized = !g_dropZoneMinimized;
                 SetWindowPos(window, nullptr, 0, 0, 540, g_dropZoneMinimized ? 34 : 240,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+                RefreshIncomingOffers();
                 InvalidateRect(window, nullptr, TRUE);
             } else {
                 dragOffset.x = x;
@@ -496,10 +522,7 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                 SetCapture(window);
             }
         } else if (!g_dropZoneMinimized && x >= 282) {
-            const size_t index = static_cast<size_t>((y - 48) / 58);
-            if (index < g_incomingOffers.size()) {
-                AcceptIncomingOffer(index);
-            }
+            SetFocus(window);
         }
         return 0;
     }
@@ -560,11 +583,6 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                     RECT size = {294, top + 22, bounds.right - 120, top + 46};
                     const auto sizeText = FormatBytes(g_incomingOffers[index].size);
                     DrawTextW(dc, sizeText.c_str(), -1, &size, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-                    RECT download = {bounds.right - 110, top + 5, bounds.right - 14, top + 40};
-                    HBRUSH button = CreateSolidBrush(RGB(44, 96, 150));
-                    FillRect(dc, &download, button);
-                    DeleteObject(button);
-                    DrawTextW(dc, L"DOWNLOAD", -1, &download, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
                 }
             }
         }
@@ -573,6 +591,14 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
     }
     case WM_ERASEBKGND:
         return 1;
+    case WM_COMMAND:
+        if (LOWORD(wParam) >= kDownloadButtonBase &&
+            LOWORD(wParam) < kDownloadButtonBase + 3 &&
+            HIWORD(wParam) == BN_CLICKED) {
+            AcceptIncomingOffer(static_cast<size_t>(LOWORD(wParam) - kDownloadButtonBase));
+            return 0;
+        }
+        return 0;
     default:
         return DefWindowProcW(window, message, wParam, lParam);
     }
