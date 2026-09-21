@@ -91,25 +91,25 @@ class ClipboardDataReceiver(
                     TYPE_FILE
                 }
 
-                pendingOutgoingFiles[cleanName] = PendingOutgoingFile(cleanName, type, payload)
                 val header = ByteBuffer.allocate(HEADER_SIZE)
                     .order(ByteOrder.LITTLE_ENDIAN)
                     .put(byteArrayOf('M'.code.toByte(), 'D'.code.toByte(), 'C'.code.toByte(), 'L'.code.toByte()))
                     .putShort(PROTOCOL_VERSION.toShort())
-                    .putShort(TYPE_FILE_OFFER.toShort())
+                    .putShort(type.toShort())
                     .putInt(nameBytes.size)
                     .putLong(payload.size.toLong())
-                    .putInt(FILE_OFFER_FLAG)
+                    .putInt(0)
                     .array()
 
                 synchronized(outputLock) {
                     val output = client.getOutputStream()
                     writeAll(output, header)
                     writeAll(output, nameBytes)
+                    writeAll(output, payload)
                     output.flush()
                 }
-                onStatus("File offer sent. Waiting for PC approval: $cleanName")
-                Log.i(TAG, "Offered file $cleanName (${payload.size} bytes)")
+                onStatus("File sent to PC: $cleanName")
+                Log.i(TAG, "Sent file $cleanName (${payload.size} bytes)")
             }.onFailure { error ->
                 Log.w(TAG, "Clipboard file send failed", error)
                 onStatus("File send failed: ${error.message ?: error.javaClass.simpleName}")

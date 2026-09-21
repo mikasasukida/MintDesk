@@ -562,8 +562,9 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
     }
 
     if (type == kTypeFileOffer) {
-        WritePendingOffer(name, payloadSize);
-        return true;
+        std::cout << "Clipboard file offer auto-accepted: " << name << " ("
+                  << payloadSize << " bytes)\n";
+        return sendFileRequest(clientSocket, name, true);
     }
 
     if (type == kTypeFileRequest) {
