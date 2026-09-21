@@ -29,7 +29,7 @@ constexpr int kDownloadButtonBase = 7000;
 constexpr UINT_PTR kTimerId = 1;
 constexpr UINT kStatusMessage = WM_APP + 1;
 constexpr UINT kUpdateFinishedMessage = WM_APP + 2;
-constexpr wchar_t kCurrentVersion[] = L"0.2.9";
+constexpr wchar_t kCurrentVersion[] = L"0.2.10";
 constexpr wchar_t kManifestUrl[] = L"https://api.github.com/repos/mikasasukida/MintDesk/contents/release/latest.json?ref=main";
 
 HWND g_status = nullptr;
@@ -43,6 +43,7 @@ HFONT g_bodyFont = nullptr;
 HBRUSH g_panelBrush = nullptr;
 bool g_updateRunning = false;
 bool g_dropZoneMinimized = false;
+int g_offerScroll = 0;
 
 struct IncomingOffer {
     std::wstring id;
@@ -291,7 +292,7 @@ void CheckForUpdates(HWND window) {
     }).detach();
 }
 
-void RefreshIncomingOffers() {
+void RefreshIncomingOffers(bool forceControls = false) {
     std::vector<IncomingOffer> offers;
     std::error_code error;
     const auto directory = PendingDirectory();
@@ -320,24 +321,36 @@ void RefreshIncomingOffers() {
             offers.push_back(std::move(offer));
         }
     }
+    const bool changed = offers.size() != g_incomingOffers.size() ||
+        !std::equal(offers.begin(), offers.end(), g_incomingOffers.begin(),
+            [](const IncomingOffer& left, const IncomingOffer& right) {
+                return left.id == right.id && left.rawName == right.rawName && left.size == right.size;
+            });
     g_incomingOffers = std::move(offers);
+    g_offerScroll = std::clamp(g_offerScroll, 0, std::max(0, static_cast<int>(g_incomingOffers.size()) - 3));
     if (g_dropZone) {
-        for (HWND button : g_downloadButtons) {
-            DestroyWindow(button);
+        if (changed || forceControls) {
+            for (HWND button : g_downloadButtons) {
+                DestroyWindow(button);
+            }
+            g_downloadButtons.clear();
         }
-        g_downloadButtons.clear();
-        if (!g_dropZoneMinimized) {
-            for (size_t index = 0; index < g_incomingOffers.size() && index < 3; ++index) {
+        if ((changed || forceControls) && !g_dropZoneMinimized) {
+            for (int visible = 0; visible < 3; ++visible) {
+                const int index = g_offerScroll + visible;
+                if (index >= static_cast<int>(g_incomingOffers.size())) {
+                    break;
+                }
                 HWND button = CreateWindowW(
                     L"BUTTON",
                     L"DOWNLOAD",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                     414,
-                    83 + static_cast<int>(index) * 52,
+                    83 + visible * 52,
                     100,
                     34,
                     g_dropZone,
-                    reinterpret_cast<HMENU>(kDownloadButtonBase + index),
+                    reinterpret_cast<HMENU>(kDownloadButtonBase + visible),
                     GetModuleHandleW(nullptr),
                     nullptr
                 );
@@ -514,7 +527,7 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                 g_dropZoneMinimized = !g_dropZoneMinimized;
                 SetWindowPos(window, nullptr, 0, 0, 540, g_dropZoneMinimized ? 34 : 240,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-                RefreshIncomingOffers();
+                RefreshIncomingOffers(true);
                 InvalidateRect(window, nullptr, TRUE);
             } else {
                 dragOffset.x = x;
@@ -534,6 +547,21 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                          SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
         return 0;
+    case WM_MOUSEWHEEL: {
+        if (g_dropZoneMinimized) {
+            return 0;
+        }
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        ScreenToClient(window, &cursor);
+        if (cursor.x >= 282 && cursor.y >= 44) {
+            const int maximum = std::max(0, static_cast<int>(g_incomingOffers.size()) - 3);
+            const int direction = GET_WHEEL_DELTA_WPARAM(wParam) > 0 ? -1 : 1;
+            g_offerScroll = std::clamp(g_offerScroll + direction, 0, maximum);
+            RefreshIncomingOffers(true);
+        }
+        return 0;
+    }
     case WM_LBUTTONUP:
         if (GetCapture() == window) {
             ReleaseCapture();
@@ -575,8 +603,12 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
                 RECT empty = {294, 88, bounds.right - 12, 130};
                 DrawTextW(dc, L"暂无待下载文件", -1, &empty, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             } else {
-                for (size_t index = 0; index < g_incomingOffers.size() && index < 3; ++index) {
-                    const int top = 78 + static_cast<int>(index) * 52;
+                for (int visible = 0; visible < 3; ++visible) {
+                    const int index = g_offerScroll + visible;
+                    if (index >= static_cast<int>(g_incomingOffers.size())) {
+                        break;
+                    }
+                    const int top = 78 + visible * 52;
                     RECT name = {294, top, bounds.right - 120, top + 24};
                     DrawTextW(dc, g_incomingOffers[index].name.c_str(), -1, &name,
                               DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
@@ -595,7 +627,7 @@ LRESULT CALLBACK DropZoneProc(HWND window, UINT message, WPARAM wParam, LPARAM l
         if (LOWORD(wParam) >= kDownloadButtonBase &&
             LOWORD(wParam) < kDownloadButtonBase + 3 &&
             HIWORD(wParam) == BN_CLICKED) {
-            AcceptIncomingOffer(static_cast<size_t>(LOWORD(wParam) - kDownloadButtonBase));
+            AcceptIncomingOffer(static_cast<size_t>(g_offerScroll + LOWORD(wParam) - kDownloadButtonBase));
             return 0;
         }
         return 0;
