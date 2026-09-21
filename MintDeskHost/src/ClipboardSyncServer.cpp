@@ -542,7 +542,8 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
 
     if (version != kVersion ||
         nameSize > 4096 ||
-        (type != kTypeText && type != kTypeImagePng && type != kTypeFile && type != kTypeFileOffer) ||
+        (type != kTypeText && type != kTypeImagePng && type != kTypeFile &&
+         type != kTypeFileOffer && type != kTypeFileRequest) ||
         (type == kTypeFileOffer && payloadSize == 0)) {
         std::cerr << "Clipboard receive rejected: version=" << version
                   << " type=" << type
@@ -563,6 +564,36 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
     if (type == kTypeFileOffer) {
         WritePendingOffer(name, payloadSize);
         return true;
+    }
+
+    if (type == kTypeFileRequest) {
+        if (payloadSize != 0) {
+            std::cerr << "Clipboard file request had an unexpected payload.\n";
+            return false;
+        }
+        if ((flags & kFileOfferFlag) == 0) {
+            std::cout << "Clipboard file request declined by client: " << name << "\n";
+            return true;
+        }
+
+        ClipboardItem requested;
+        bool found = false;
+        {
+            std::lock_guard lock(pendingMutex_);
+            for (const auto& item : pendingFiles_) {
+                if (item.name == name) {
+                    requested = item;
+                    found = true;
+                    break;
+                }
+            }
+        }
+        if (!found) {
+            std::cerr << "Clipboard file request not found: " << name << "\n";
+            return true;
+        }
+        std::cout << "Clipboard file request accepted: " << name << "\n";
+        return sendItem(clientSocket, requested, true);
     }
 
     std::vector<uint8_t> payload(static_cast<size_t>(payloadSize));
