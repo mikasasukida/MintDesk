@@ -571,11 +571,6 @@ bool ClipboardSyncServer::receiveItem(SOCKET clientSocket) {
             std::cerr << "Clipboard file request had an unexpected payload.\n";
             return false;
         }
-        if ((flags & kFileOfferFlag) == 0) {
-            std::cout << "Clipboard file request declined by client: " << name << "\n";
-            return true;
-        }
-
         ClipboardItem requested;
         bool found = false;
         {
